@@ -13,6 +13,25 @@ import (
 	"github.com/ikhsan3adi/gemini-web2api/internal/models"
 )
 
+// toolCallFromMap converts the loose map form produced by
+// ResponsesInputToMessages back into the typed tool call.
+func toolCallFromMap(m map[string]any) models.OpenAIToolCall {
+	tc := models.OpenAIToolCall{}
+	tc.ID, _ = m["id"].(string)
+	tc.Type, _ = m["type"].(string)
+	if tc.Type == "" {
+		tc.Type = "function"
+	}
+	if fn, ok := m["function"].(map[string]any); ok {
+		tc.Function.Name, _ = fn["name"].(string)
+		tc.Function.Arguments, _ = fn["arguments"].(string)
+	}
+	if tc.Function.Arguments == "" {
+		tc.Function.Arguments = "{}"
+	}
+	return tc
+}
+
 func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil || len(bodyBytes) == 0 {
@@ -31,7 +50,9 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		modelStr = a.Cfg.DefaultModel
 	}
 
-	resolved, err := models.Resolve(modelStr, a.Cfg.DefaultModel)
+	resolved, err := models.ResolveWithOptions(modelStr, a.Cfg.DefaultModel, models.ResolveOptions{
+		ReasoningEffort: responsesEffort(req),
+	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": err.Error()}})
 		return
@@ -50,8 +71,22 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	var reqMessages []models.OpenAIMessage
 	for _, m := range messages {
 		role, _ := m["role"].(string)
-		content := m["content"]
-		reqMessages = append(reqMessages, models.OpenAIMessage{Role: role, Content: content})
+		msg := models.OpenAIMessage{Role: role, Content: m["content"]}
+
+		// Results must reach MessagesToPrompt with the call id intact; without
+		// it a role:"tool" turn loses which call it answers.
+		if id, ok := m["tool_call_id"].(string); ok {
+			msg.ToolCallID = id
+		}
+		if name, ok := m["name"].(string); ok {
+			msg.Name = name
+		}
+		if rawCalls, ok := m["tool_calls"].([]map[string]any); ok {
+			for _, rc := range rawCalls {
+				msg.ToolCalls = append(msg.ToolCalls, toolCallFromMap(rc))
+			}
+		}
+		reqMessages = append(reqMessages, msg)
 	}
 
 	var reqTools []models.OpenAITool
@@ -84,7 +119,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		ToolChoice: toolChoice,
 	}
 
-	prompt, images, err := format.MessagesToPrompt(chatReq)
+	prompt, images, err := format.MessagesToPromptWithOptions(chatReq, a.toolOptions())
 	if err != nil || strings.TrimSpace(prompt) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "empty input"}})
 		return
@@ -109,14 +144,14 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		Extra:       resolved.Extra,
 	}
 
-	text, err := a.Gem.Generate(prompt, gemOpt, fileRefs)
+	text, err := a.Gem.Generate(r.Context(), prompt, gemOpt, fileRefs)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": fmt.Sprintf("upstream error: %v", err)}})
 		return
 	}
 
-	strChoice, isStr := toolChoice.(string)
-	isToolNone := isStr && strChoice == "none"
+	toolMode := format.ToolChoiceMode(toolChoice)
+	isToolNone := toolMode == "none"
 
 	var toolCalls []models.OpenAIToolCall
 	if len(reqTools) > 0 && text != "" && !isToolNone {
@@ -138,16 +173,21 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		seqNum := 0
+		var streamErr error
 		emit := func(eventType string, fields map[string]any) {
+			if streamErr != nil {
+				return
+			}
 			seqNum++
 			event := map[string]any{
 				"type":            eventType,
 				"sequence_number": seqNum,
+				"response_id":     rid,
 			}
 			for k, v := range fields {
 				event[k] = v
 			}
-			_ = writeSSEEvent(w, eventType, event)
+			streamErr = writeSSEEvent(w, eventType, event)
 		}
 
 		usage := map[string]any{
@@ -276,6 +316,8 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		emit("response.completed", map[string]any{
 			"response": withStatus("completed", outputItems, usage),
 		})
+		// The Responses API terminates the SSE stream after
+		// response.completed; unlike chat.completions it has no [DONE] sentinel.
 	} else {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":         rid,

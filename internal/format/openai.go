@@ -3,7 +3,6 @@ package format
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -182,28 +181,113 @@ func ImageFromPart(mapItem map[string]any) (Image, bool) {
 	return Image{}, false
 }
 
-// BuildToolChoiceInstruction returns a prompt suffix based on the tool_choice parameter.
+// BuildToolChoiceInstruction returns a prompt directive for tool_choice.
+//
+// It is advisory only: this proxy drives Gemini's web UI through a prompt, so
+// there is no server-side constrained decoding to force a call. "required" and
+// a named tool therefore become a strong instruction, not a guarantee. Callers
+// must not treat a missing tool call as a protocol violation.
 func BuildToolChoiceInstruction(toolChoice any) string {
 	if strChoice, ok := toolChoice.(string); ok {
-		if strChoice == "none" {
+		switch strChoice {
+		case "none":
 			return "\n\nIMPORTANT: Do NOT call any tools. Respond with text only."
-		}
-		if strChoice == "required" {
-			return "\n\nIMPORTANT: You MUST call at least one tool. Do not respond with text only."
+		case "required", "any":
+			return "\n\nIMPORTANT: You MUST call at least one tool. Output only tool_call block(s), " +
+				"no prose. Do not respond with text only."
 		}
 	} else if mapChoice, ok := toolChoice.(map[string]any); ok {
+		// OpenAI: {"type":"function","function":{"name":"x"}}
+		// Legacy OpenAI: {"name":"x"}
+		// Gemini:      {"functionCallingConfig":{...}} is handled separately.
 		if fn, ok := mapChoice["function"].(map[string]any); ok {
 			if name, ok := fn["name"].(string); ok && name != "" {
-				return fmt.Sprintf("\n\nIMPORTANT: You MUST call the tool \"%s\". Do not call other tools.", name)
+				return fmt.Sprintf("\n\nIMPORTANT: You MUST call exactly the tool %q and no other tool. "+
+					"Output only the tool_call block, no prose.", name)
 			}
+		}
+		if name, ok := mapChoice["name"].(string); ok && name != "" {
+			return fmt.Sprintf("\n\nIMPORTANT: You MUST call exactly the tool %q and no other tool. "+
+				"Output only the tool_call block, no prose.", name)
 		}
 	}
 	return ""
 }
 
+// ToolChoiceName returns the specific function name requested by a
+// tool_choice object, or "" when none was named.
+func ToolChoiceName(toolChoice any) string {
+	m, ok := toolChoice.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if fn, ok := m["function"].(map[string]any); ok {
+		if name, ok := fn["name"].(string); ok {
+			return name
+		}
+	}
+	if name, ok := m["name"].(string); ok {
+		return name
+	}
+	return ""
+}
+
+// ToolChoiceMode classifies a tool_choice value into none/required/named/auto.
+// Gemini's uppercase modes (NONE/ANY/AUTO) are normalized too, so a single
+// helper serves all three endpoints.
+func ToolChoiceMode(toolChoice any) string {
+	name := ToolChoiceName(toolChoice)
+	if name != "" {
+		return "named"
+	}
+	s, ok := toolChoice.(string)
+	if !ok {
+		return "auto"
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "none":
+		return "none"
+	case "required", "any":
+		return "required"
+	}
+	return "auto"
+}
+
+// ToolOptions controls how tool definitions are rendered into the prompt.
+type ToolOptions struct {
+	// MaxSchemaBytes is the byte budget for the serialized tool definition
+	// block. Zero means DefaultToolSchemaMaxBytes.
+	MaxSchemaBytes int
+}
+
+// DefaultToolOptions returns the options used when the caller has no config.
+func DefaultToolOptions() ToolOptions {
+	return ToolOptions{MaxSchemaBytes: DefaultToolSchemaMaxBytes}
+}
+
+// MessagesToPrompt renders a chat request into the prompt text Gemini web
+// consumes, extracting images for separate upload.
 func MessagesToPrompt(req models.OpenAIChatRequest) (string, []Image, error) {
+	return MessagesToPromptWithOptions(req, DefaultToolOptions())
+}
+
+// MessagesToPromptWithOptions is MessagesToPrompt with an explicit budget for
+// the injected tool definitions.
+func MessagesToPromptWithOptions(req models.OpenAIChatRequest, opts ToolOptions) (string, []Image, error) {
 	var parts []string
 	var images []Image
+
+	// callNames maps a tool_call id to the function name it invoked. OpenAI
+	// clients only echo the id back on role:"tool" messages, so the name must
+	// come from the assistant turn that issued the call.
+	callNames := make(map[string]string)
+	for _, msg := range req.Messages {
+		for _, tc := range msg.ToolCalls {
+			if tc.ID != "" && tc.Function.Name != "" {
+				callNames[tc.ID] = tc.Function.Name
+			}
+		}
+	}
 
 	strChoice, isStr := req.ToolChoice.(string)
 	if (!isStr || strChoice != "none") && len(req.Tools) > 0 {
@@ -228,24 +312,25 @@ func MessagesToPrompt(req models.OpenAIChatRequest) (string, []Image, error) {
 
 		if len(toolDefs) > 0 {
 			constraint := BuildToolChoiceInstruction(req.ToolChoice)
-			defsJSON, _ := json.Marshal(toolDefs)
-			// Tool slimming: if tool definitions exceed 30KB, re-marshal with name+description only.
-			if len(defsJSON) > 30000 {
-				log.Printf("Tool defs too large (%d bytes), slimming to name+description only", len(defsJSON))
-				slimmed := make([]models.OpenAIFunction, len(toolDefs))
-				for i, fn := range toolDefs {
-					slimmed[i] = models.OpenAIFunction{
-						Name:        fn.Name,
-						Description: fn.Description,
-					}
-				}
-				defsJSON, _ = json.Marshal(slimmed)
+			// Compression never discards the JSON Schema: it sheds cosmetic
+			// keywords and (at the last level) deep properties while keeping
+			// type/required/enum/items/additionalProperties. See schema.go.
+			defsJSON, level := CompressToolDefinitions(toolDefs, opts.MaxSchemaBytes)
+			if level != SchemaKeepAll {
+				log.Printf("Tool defs compressed (level=%s, %d bytes, %d tools)",
+					level, len(defsJSON), len(toolDefs))
 			}
 			parts = append(parts, fmt.Sprintf(
 				"# Tool Use\n\n"+
-					"You can call the following tools. Call format:\n"+
+					"You are running inside an agent runtime that executes the tools below on the user's machine. "+
+					"You do NOT execute them yourself; you emit a call and the runtime returns the result.\n\n"+
+					"Each tool's `parameters` is a JSON Schema; argument names and types MUST conform to it.\n"+
+					"Call format:\n"+
 					"```tool_call\n{\"name\": \"func_name\", \"arguments\": {...}}\n```\n"+
 					"When calling tools, output ONLY the tool_call block(s).\n\n"+
+					"A `[Tool result for <name>]` message is the real output of a call you already made. "+
+					"Treat it as authoritative fact and continue the task from it. "+
+					"Never claim you lack access to a tool: every tool listed here is available.\n\n"+
 					"Available tools:\n%s%s",
 				string(defsJSON),
 				constraint,
@@ -283,7 +368,7 @@ func MessagesToPrompt(req models.OpenAIChatRequest) (string, []Image, error) {
 		}
 
 		switch role {
-		case "system":
+		case "system", "developer":
 			parts = append(parts, fmt.Sprintf("[System instruction]: %s", contentStr))
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
@@ -293,14 +378,41 @@ func MessagesToPrompt(req models.OpenAIChatRequest) (string, []Image, error) {
 					if argsStr == "" {
 						argsStr = "{}"
 					}
-					tcStrs = append(tcStrs, fmt.Sprintf("```tool_call\n{\"name\": \"%s\", \"arguments\": %s}\n```", tc.Function.Name, argsStr))
+					// Echo the id back so the model can pair the result with the
+					// call. Without it, parallel calls with the same tool name
+					// become ambiguous.
+					tcStrs = append(tcStrs, buildToolCallBlock(tc.ID, tc.Function.Name, argsStr))
 				}
 				parts = append(parts, fmt.Sprintf("[Assistant]: %s\n%s", contentStr, strings.Join(tcStrs, "\n")))
 			} else {
 				parts = append(parts, fmt.Sprintf("[Assistant]: %s", contentStr))
 			}
-		case "tool":
-			parts = append(parts, fmt.Sprintf("[Tool result for %s]: %s", msg.Name, contentStr))
+		case "tool", "function":
+			// The model needs the tool NAME to make sense of the result; an
+			// opaque call id tells it nothing. Standard OpenAI clients send only
+			// tool_call_id, so resolve the name from the matching assistant
+			// tool_calls entry recorded earlier in the conversation.
+			name := msg.Name
+			if name == "" {
+				name = callNames[msg.ToolCallID]
+			}
+			var label string
+			switch {
+			case name != "" && msg.ToolCallID != "":
+				// Best case: the model sees both what produced the data and
+				// which call it belongs to, so parallel calls stay distinct.
+				label = fmt.Sprintf("%s (call id %s)", name, msg.ToolCallID)
+			case name != "":
+				label = name
+			case msg.ToolCallID != "":
+				// The id was never seen in an assistant turn (truncated history
+				// or client-generated id). Say so instead of presenting an
+				// opaque id as if it were a tool name.
+				label = fmt.Sprintf("%s, tool name unknown", msg.ToolCallID)
+			default:
+				label = "unknown tool"
+			}
+			parts = append(parts, fmt.Sprintf("[Tool result for %s]: %s", label, contentStr))
 		default:
 			if contentStr != "" {
 				parts = append(parts, contentStr)
@@ -311,53 +423,92 @@ func MessagesToPrompt(req models.OpenAIChatRequest) (string, []Image, error) {
 	return strings.Join(parts, "\n\n"), images, nil
 }
 
-var reToolCall = regexp.MustCompile(`(?s)\x60\x60\x60tool_call\s*\n(.*?)\n\x60\x60\x60`)
+// buildToolCallBlock renders a single tool call in the format the model is
+// told to reproduce. JSON-encoding the name avoids quote-injection.
+func buildToolCallBlock(id, name, argsJSON string) string {
+	if argsJSON == "" {
+		argsJSON = "{}"
+	}
+	var payload string
+	if id != "" {
+		payload = fmt.Sprintf(`{"name": %q, "id": %q, "arguments": %s}`, name, id, argsJSON)
+	} else {
+		payload = fmt.Sprintf(`{"name": %q, "arguments": %s}`, name, argsJSON)
+	}
+	return "```tool_call\n" + payload + "\n```"
+}
 
-// ParseToolCalls extracts tool calls from the raw string output of the model.
-// The model is instructed to output tool calls in markdown blocks e.g. ```tool_call\n{...}\n```.
-// This function parses those blocks, removes them from the text, and returns the cleaned text along with structured ToolCalls.
+// ParseToolCalls extracts tool calls from model output.
+//
+// Models are told to emit ```tool_call {"name":..., "arguments":...} ``` blocks,
+// but output in the wild is messier: missing closing fences, bare JSON, prose
+// mixed in, nested braces and backticks inside argument strings, or multiple
+// blocks per answer. extractPayloads handles discovery; this function maps each
+// payload to a structurally valid OpenAI tool call and returns the residual
+// text with all call blocks stripped.
+//
+// Unparseable payloads are dropped from the call list but still removed from
+// the text so the user never sees raw tool syntax.
 func ParseToolCalls(text string) (string, []models.OpenAIToolCall) {
+	clean, payloads := extractPayloads(text)
+	if len(payloads) == 0 {
+		clean = text
+		// Some models emit a single bare JSON object with no tag at all when
+		// the only instruction is a schema. Only accept it when it clearly
+		// looks like a call.
+		if name, args, _, id, ok := parseCallPayload(strings.TrimSpace(text)); ok &&
+			strings.HasPrefix(strings.TrimSpace(text), "{") {
+			return "", []models.OpenAIToolCall{newToolCall(id, name, args)}
+		}
+		return clean, nil
+	}
+
 	var toolCalls []models.OpenAIToolCall
-	matches := reToolCall.FindAllStringSubmatchIndex(text, -1)
-	if len(matches) == 0 {
-		return text, nil
+	for _, payload := range payloads {
+		name, argsString, _, id, ok := parseCallPayload(payload)
+		if !ok {
+			continue
+		}
+		toolCalls = append(toolCalls, newToolCall(id, name, argsString))
 	}
 
-	var cleanParts []string
-	lastEnd := 0
-
-	for _, m := range matches {
-		cleanParts = append(cleanParts, text[lastEnd:m[0]])
-		lastEnd = m[1]
-
-		content := strings.TrimSpace(text[m[2]:m[3]])
-		var data struct {
-			Name      string `json:"name"`
-			Arguments any    `json:"arguments"`
-		}
-		if err := json.Unmarshal([]byte(content), &data); err == nil && data.Name != "" {
-			var argsStr string
-			if str, ok := data.Arguments.(string); ok {
-				argsStr = str
-			} else if data.Arguments != nil {
-				b, _ := json.Marshal(data.Arguments)
-				argsStr = string(b)
-			} else {
-				argsStr = "{}"
-			}
-
-			toolCalls = append(toolCalls, models.OpenAIToolCall{
-				ID:   fmt.Sprintf("call_%s", RandHex(8)),
-				Type: "function",
-				Function: models.OpenAIToolCallFunction{
-					Name:      data.Name,
-					Arguments: argsStr,
-				},
-			})
-		}
-	}
-
-	cleanParts = append(cleanParts, text[lastEnd:])
-	clean := strings.TrimSpace(strings.Join(cleanParts, ""))
 	return clean, toolCalls
+}
+
+// newToolCall builds a validated OpenAI tool call, generating an id when the
+// model did not supply one.
+func newToolCall(id, name, argsJSON string) models.OpenAIToolCall {
+	if id == "" {
+		id = newCallID()
+	}
+	if argsJSON == "" {
+		argsJSON = "{}"
+	}
+	return models.OpenAIToolCall{
+		ID:   id,
+		Type: "function",
+		Function: models.OpenAIToolCallFunction{
+			Name:      name,
+			Arguments: argsJSON,
+		},
+	}
+}
+
+// BuildToolCallsSummary renders tool calls as a short human-readable list for
+// prompts where a full block would be redundant.
+func BuildToolCallsSummary(calls []models.OpenAIToolCall) string {
+	if len(calls) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, tc := range calls {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(tc.Function.Name)
+		b.WriteString("(")
+		b.WriteString(tc.Function.Arguments)
+		b.WriteString(")")
+	}
+	return b.String()
 }

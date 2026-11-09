@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/ikhsan3adi/gemini-web2api/internal/format"
 	"github.com/ikhsan3adi/gemini-web2api/internal/models"
@@ -15,6 +16,81 @@ func setModelHeaders(w http.ResponseWriter, resolved models.Resolved) {
 	w.Header().Set("X-Resolved-Model", resolved.Name)
 	if resolved.Fallback {
 		w.Header().Set("X-Model-Fallback", "true")
+	}
+	w.Header().Set("X-Resolved-Think", strconv.Itoa(resolved.Think))
+	if resolved.ThinkSource != "" {
+		w.Header().Set("X-Think-Source", resolved.ThinkSource)
+	}
+	if resolved.Effort != "" {
+		w.Header().Set("X-Resolved-Effort", resolved.Effort)
+	}
+}
+
+// requestEffort extracts a reasoning effort from an OpenAI chat request.
+// reasoning_effort wins over the nested reasoning.effort form.
+func requestEffort(req models.OpenAIChatRequest) string {
+	if req.ReasoningEffort != "" {
+		return req.ReasoningEffort
+	}
+	if req.Reasoning != nil && req.Reasoning.Effort != "" {
+		return req.Reasoning.Effort
+	}
+	return ""
+}
+
+// responsesEffort extracts a reasoning effort from a /v1/responses body.
+// Accepts reasoning.effort and the flat reasoning_effort field.
+func responsesEffort(req map[string]any) string {
+	if r, ok := req["reasoning"].(map[string]any); ok {
+		if e, ok := r["effort"].(string); ok && e != "" {
+			return e
+		}
+	}
+	if e, ok := req["reasoning_effort"].(string); ok {
+		return e
+	}
+	return ""
+}
+
+// googleEffort extracts a thinking level from a native Gemini request.
+// thinkingLevel is preferred; the legacy thinkingBudget is converted to a
+// coarse effort band so older clients still influence depth.
+func googleEffort(req models.GoogleGenerateRequest) string {
+	if req.GenerationConfig != nil && req.GenerationConfig.ThinkingConfig != nil {
+		tc := req.GenerationConfig.ThinkingConfig
+		if tc.ThinkingLevel != "" {
+			return tc.ThinkingLevel
+		}
+		if tc.ThinkingBudget != nil {
+			return budgetToEffort(*tc.ThinkingBudget)
+		}
+	}
+	return ""
+}
+
+// toolOptions builds the format-layer options from configuration.
+func (a *App) toolOptions() format.ToolOptions {
+	budget := a.Cfg.ToolSchemaMaxBytes
+	if budget <= 0 {
+		budget = format.DefaultToolSchemaMaxBytes
+	}
+	return format.ToolOptions{MaxSchemaBytes: budget}
+}
+
+// budgetToEffort maps the legacy thinkingBudget integer onto an effort label.
+// The native API treats 0 as "no thinking" and -1 as dynamic.
+func budgetToEffort(b int) string {
+	switch {
+	case b < 0:
+		return "high" // dynamic budget defaults to the deepest path
+	case b == 0:
+		return "none"
+	case b <= 1024:
+		return "low"
+	case b <= 8192:
+		return "medium"
+	default:
+		return "high"
 	}
 }
 

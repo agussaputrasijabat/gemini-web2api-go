@@ -12,10 +12,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	modelNames := make([]string, 0, len(models.MODELS))
-	for k := range models.MODELS {
-		modelNames = append(modelNames, k)
-	}
+	modelNames := models.Names()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -26,13 +23,13 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 	var data []map[string]any
-	for name, m := range models.MODELS {
+	for _, name := range models.Names() {
 		data = append(data, map[string]any{
 			"id":          name,
 			"object":      "model",
 			"created":     1700000000,
 			"owned_by":    "google",
-			"description": m.Desc,
+			"description": models.MODELS[name].Desc,
 		})
 	}
 

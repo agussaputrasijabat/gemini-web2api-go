@@ -70,7 +70,7 @@ func (c *TokenCache) fetchPageTokens() PageTokens {
 		return tokens
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", gemini.UserAgent(c.cfg.Impersonate))
 	cookieInfo, _ := c.cookie.Load()
 	if cookieInfo.Cookie != "" {
 		req.Header.Set("Cookie", cookieInfo.Cookie)

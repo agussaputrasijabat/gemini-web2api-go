@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -90,6 +91,71 @@ var MODELS = map[string]Model{
 	},
 }
 
+// ThinkSource records where the final thinking depth came from.
+const (
+	ThinkSourceModel  = "model"
+	ThinkSourceSuffix = "suffix"
+	ThinkSourceEffort = "effort"
+)
+
+// Thinking depth scale used by Gemini web (payload index 17).
+// 0 is the deepest reasoning, 4 the shallowest.
+const (
+	ThinkDeepest    = 0
+	ThinkMedium     = 2
+	ThinkLow        = 3
+	ThinkShallowest = 4
+)
+
+// effortToThink maps a reasoning effort label to Gemini web thinking depth.
+var effortToThink = map[string]int{
+	"none":    ThinkShallowest,
+	"minimal": ThinkShallowest,
+	"low":     ThinkLow,
+	"medium":  ThinkMedium,
+	"high":    ThinkDeepest,
+	"xhigh":   ThinkDeepest,
+	"max":     ThinkDeepest,
+}
+
+// effortAlias accepts common shorthands clients send.
+var effortAlias = map[string]string{
+	"min":     "minimal",
+	"med":     "medium",
+	"hi":      "high",
+	"x-high":  "xhigh",
+	"deep":    "high",
+	"deepest": "xhigh",
+}
+
+// NormalizeEffort lowercases and expands shorthand aliases.
+func NormalizeEffort(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	if alias, ok := effortAlias[s]; ok {
+		return alias
+	}
+	return s
+}
+
+// EffortToThink converts a reasoning effort label to a Gemini web thinking depth.
+// The second return value is false when the label is empty or unrecognized.
+func EffortToThink(raw string) (int, bool) {
+	effort := NormalizeEffort(raw)
+	if effort == "" {
+		return 0, false
+	}
+	depth, ok := effortToThink[effort]
+	return depth, ok
+}
+
+// SupportedEfforts lists every accepted reasoning effort label, for error messages.
+func SupportedEfforts() []string {
+	return []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+}
+
 type Resolved struct {
 	Name     string
 	Mode     int
@@ -97,27 +163,80 @@ type Resolved struct {
 	Header   string
 	Fallback bool
 	Extra    map[int]any
+
+	// ThinkSource is "suffix" when "@think=N" was parsed, "effort" when a
+	// reasoning effort label decided the depth, and "model" for the default.
+	ThinkSource string
+	// Effort is the normalized reasoning effort label, empty when unspecified.
+	Effort string
 }
 
 const DefaultModelName = "gemini-3.6-flash"
 
-// Resolve maps a requested model string to its corresponding backend configuration.
-// It supports model name suffixes like "@think=N" (e.g. "gemini-3.6-flash@think=0")
-// to dynamically override the model's default thinking depth without modifying the model mapping.
+// Names returns every configured model id in sorted order. Output is
+// deterministic so /v1/models responses are diffable and caches stable.
+func Names() []string {
+	names := make([]string, 0, len(MODELS))
+	for k := range MODELS {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ResolveOptions carries per-request overrides that are not part of the model name.
+type ResolveOptions struct {
+	// ReasoningEffort accepts none/minimal/low/medium/high/xhigh.
+	ReasoningEffort string
+}
+
+// Resolve maps a requested model string to its backend configuration using
+// model defaults only. Kept for callers that have no per-request overrides.
 func Resolve(modelName, defaultName string) (Resolved, error) {
+	return ResolveWithOptions(modelName, defaultName, ResolveOptions{})
+}
+
+// ResolveWithOptions maps a requested model string to its backend configuration,
+// applying per-request reasoning overrides.
+//
+// Precedence for thinking depth, highest first:
+//  1. "@think=N" suffix in the model name (explicit and model-specific)
+//  2. ReasoningEffort from the request (reasoning_effort / reasoning.effort /
+//     generationConfig.thinkingConfig.thinkingLevel)
+//  3. The model's default Think value
+//
+// An unrecognized effort label returns an error instead of silently using the
+// model default, so client typos surface as HTTP 400.
+func ResolveWithOptions(modelName, defaultName string, opts ResolveOptions) (Resolved, error) {
 	if defaultName == "" {
 		defaultName = DefaultModelName
 	}
 
 	var thinkOverride *int
-	if idx := strings.LastIndex(modelName, "@think="); idx != -1 {
+	// The suffix must be the whole tail: "model@think=" and "a@think=2x" are
+	// treated as plain model names rather than silently losing part of the id.
+	if idx := strings.LastIndex(modelName, "@think="); idx != -1 && idx+len("@think=") < len(modelName) {
 		thinkStr := modelName[idx+len("@think="):]
 		modelName = modelName[:idx]
 		val, err := strconv.Atoi(thinkStr)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("invalid think level: %s", thinkStr)
 		}
+		if val < 0 || val > 4 {
+			return Resolved{}, fmt.Errorf("think level must be between 0 (deepest) and 4 (shallowest), got %d", val)
+		}
 		thinkOverride = &val
+	}
+
+	effort := NormalizeEffort(opts.ReasoningEffort)
+	var effortDepth *int
+	if effort != "" {
+		depth, ok := effortToThink[effort]
+		if !ok {
+			return Resolved{}, fmt.Errorf("invalid reasoning effort: %q (supported: %s)",
+				opts.ReasoningEffort, strings.Join(SupportedEfforts(), ", "))
+		}
+		effortDepth = &depth
 	}
 
 	cfg, exists := MODELS[modelName]
@@ -130,16 +249,25 @@ func Resolve(modelName, defaultName string) (Resolved, error) {
 	}
 
 	thinkMode := cfg.Think
-	if thinkOverride != nil {
+	thinkSource := ThinkSourceModel
+
+	switch {
+	case thinkOverride != nil:
 		thinkMode = *thinkOverride
+		thinkSource = ThinkSourceSuffix
+	case effortDepth != nil:
+		thinkMode = *effortDepth
+		thinkSource = ThinkSourceEffort
 	}
 
 	return Resolved{
-		Name:     modelName,
-		Mode:     cfg.Mode,
-		Think:    thinkMode,
-		Header:   cfg.Header,
-		Fallback: fallback,
-		Extra:    cfg.Extra,
+		Name:        modelName,
+		Mode:        cfg.Mode,
+		Think:       thinkMode,
+		Header:      cfg.Header,
+		Fallback:    fallback,
+		Extra:       cfg.Extra,
+		ThinkSource: thinkSource,
+		Effort:      effort,
 	}, nil
 }

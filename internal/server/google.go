@@ -49,7 +49,9 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 		modelName = a.Cfg.DefaultModel
 	}
 
-	resolved, err := models.Resolve(modelName, a.Cfg.DefaultModel)
+	resolved, err := models.ResolveWithOptions(modelName, a.Cfg.DefaultModel, models.ResolveOptions{
+		ReasoningEffort: googleEffort(req),
+	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": err.Error()}})
 		return
@@ -63,7 +65,7 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	hasTools := len(req.Tools) > 0 && fcMode != "NONE"
 
-	prompt, images, err := format.GoogleContentsToPrompt(req)
+	prompt, images, err := format.GoogleContentsToPromptWithOptions(req, a.toolOptions())
 	if err != nil || len(prompt) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "empty content"}})
 		return
@@ -91,7 +93,7 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var fullText string
-		emitErr := a.Gem.GenerateStream(prompt, gemOpt, fileRefs, func(delta string) error {
+		emitErr := a.Gem.GenerateStream(r.Context(), prompt, gemOpt, fileRefs, func(delta string) error {
 			if delta == "" {
 				return nil
 			}
@@ -137,26 +139,37 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	text, err := a.Gem.Generate(prompt, gemOpt, fileRefs)
+	text, err := a.Gem.Generate(r.Context(), prompt, gemOpt, fileRefs)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": fmt.Sprintf("upstream error: %v", err)}})
 		return
 	}
 
+	// A native functionCall is only detectable after the answer is complete,
+	// because the upstream path is prompt-based. When the client asked for a
+	// stream, we therefore serve the parsed result as a short SSE stream: one
+	// content chunk, one functionCall chunk per call, one terminal chunk with
+	// finishReason STOP. This is what the native API does for a non-streamed
+	// turn replayed as a stream, and it keeps clients that require
+	// streamGenerateContent working.
 	var responseParts []models.GooglePart
 	if hasTools && text != "" {
-		cleanText, fnCalls := format.ParseGoogleFunctionCalls(text)
-		if len(fnCalls) > 0 {
+		cleanText, calls := format.ParseGoogleFunctionCalls(text)
+		if len(calls) > 0 {
 			if cleanText != "" {
 				responseParts = append(responseParts, models.GooglePart{Text: cleanText})
 			}
-			for _, fc := range fnCalls {
-				responseParts = append(responseParts, models.GooglePart{
+			for _, fc := range calls {
+				part := models.GooglePart{
 					FunctionCall: &models.GoogleFunctionCall{
 						Name: fc.Name,
 						Args: fc.Args,
 					},
-				})
+				}
+				if fc.ID != "" {
+					part.FunctionCall.ID = fc.ID
+				}
+				responseParts = append(responseParts, part)
 			}
 		} else {
 			responseParts = append(responseParts, models.GooglePart{Text: text})
@@ -172,6 +185,10 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 	promptTokens := len(prompt) / 4
 	candidatesTokens := len(text) / 4
 
+	// Native API contract: a turn that produced functionCall(s) must report
+	// finishReason STOP, not a tool-specific value.
+	finishReason := "STOP"
+
 	responseObj := models.GoogleGenerateResponse{
 		Candidates: []models.GoogleCandidate{
 			{
@@ -180,7 +197,7 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 					Role:  "model",
 					Parts: responseParts,
 				},
-				FinishReason: "STOP",
+				FinishReason: finishReason,
 			},
 		},
 		UsageMetadata: &models.GoogleUsageMetadata{
@@ -195,7 +212,29 @@ func (a *App) handleGoogleGenerate(w http.ResponseWriter, r *http.Request) {
 		if !startSSE(w) {
 			return
 		}
-		_ = writeSSEData(w, responseObj)
+		// Emit text first, then one chunk per functionCall, then the terminal
+		// chunk. Splitting per part lets clients that only inspect each chunk's
+		// first part still see every function call.
+		for _, part := range responseParts {
+			chunk := models.GoogleGenerateResponse{
+				Candidates: []models.GoogleCandidate{
+					{
+						Index: 0,
+						Content: &models.GoogleContent{
+							Role:  "model",
+							Parts: []models.GooglePart{part},
+						},
+					},
+				},
+				ModelVersion: resolved.Name,
+			}
+			if err := writeSSEData(w, chunk); err != nil {
+				return
+			}
+		}
+		if err := writeSSEData(w, responseObj); err != nil {
+			a.Logf("Google API: failed to write final SSE chunk: %v", err)
+		}
 	} else {
 		writeJSON(w, http.StatusOK, responseObj)
 	}

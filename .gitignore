@@ -25,5 +25,18 @@ gemini-web2api
 
 # Auth credentials
 gemini-auth.json
+cookie.txt
+cookie.json
+accounts/
+
+# Local config holds API keys and the cookie file path
+config.json
+
+# Node helpers (cookie grabber)
+node_modules/
+package-lock.json
+
+# PM2 logs
+logs/
 
 .ignore/

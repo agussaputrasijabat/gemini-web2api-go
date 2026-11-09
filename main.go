@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ikhsan3adi/gemini-web2api/internal/config"
+	"github.com/ikhsan3adi/gemini-web2api/internal/gemini"
 	"github.com/ikhsan3adi/gemini-web2api/internal/models"
 	"github.com/ikhsan3adi/gemini-web2api/internal/server"
 )
@@ -120,6 +121,21 @@ func main() {
 	fmt.Printf("  Impersonate: %s\n", impersonateStatus)
 	fmt.Printf("  Temporary:   %s\n", temporaryStatus)
 	fmt.Println()
+
+	if cfg.Impersonate == "" {
+		log.Printf("WARNING: impersonate is empty - upstream requests use the Go stdlib TLS/HTTP2 "+
+			"fingerprint while sending a browser User-Agent. That UA/TLS mismatch raises the risk "+
+			"score and is a common cause of sorry/index (IP flag) blocks. Set --impersonate %s "+
+			"(valid profiles: %s).",
+			gemini.DefaultProfileName, strings.Join(gemini.KnownProfiles(), ", "))
+	} else {
+		if !gemini.IsKnownProfile(cfg.Impersonate) {
+			log.Printf("WARNING: impersonate profile %q is not recognized; requests will use %s "+
+				"instead. Valid profiles: %s",
+				cfg.Impersonate, gemini.DefaultProfileName, strings.Join(gemini.KnownProfiles(), ", "))
+		}
+		log.Printf("TLS impersonation active: profile=%s proxy=%s", cfg.Impersonate, proxyStatus)
+	}
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),

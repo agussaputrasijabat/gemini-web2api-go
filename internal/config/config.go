@@ -22,25 +22,33 @@ type Config struct {
 	APIKeys           []string `json:"api_keys"`
 	Impersonate       string   `json:"impersonate"`
 	TemporaryChats    bool     `json:"temporary_chats"`
+
+	// ToolSchemaMaxBytes is the byte budget for the JSON Schema block injected
+	// into the prompt by the tool-calling emulation. When the definitions
+	// exceed it, cosmetic keywords and deep properties are dropped in stages;
+	// the schema shape is never discarded. Zero/negative means the built-in
+	// default (30000).
+	ToolSchemaMaxBytes int `json:"tool_schema_max_bytes"`
 }
 
 func Default() Config {
 	return Config{
-		Port:              8081,
-		Host:              "0.0.0.0",
-		RetryAttempts:     3,
-		RetryDelaySec:     2,
-		RequestTimeoutSec: 180,
-		GeminiBL:          "boq_assistant-bard-web-server_20260716.08_p0",
-		AuthUser:          "",
-		XSRFToken:         "",
-		DefaultModel:      "gemini-3.6-flash",
-		LogRequests:       true,
-		CookieFile:        "",
-		Proxy:             "",
-		APIKeys:           []string{},
-		Impersonate:       "",
-		TemporaryChats:    false,
+		Port:               8081,
+		Host:               "0.0.0.0",
+		RetryAttempts:      3,
+		RetryDelaySec:      2,
+		RequestTimeoutSec:  180,
+		GeminiBL:           "boq_assistant-bard-web-server_20260716.08_p0",
+		AuthUser:           "",
+		XSRFToken:          "",
+		DefaultModel:       "gemini-3.6-flash",
+		LogRequests:        true,
+		CookieFile:         "",
+		Proxy:              "",
+		APIKeys:            []string{},
+		Impersonate:        "",
+		TemporaryChats:     false,
+		ToolSchemaMaxBytes: 30000,
 	}
 }
 
@@ -59,21 +67,22 @@ func Load(path string) (Config, error) {
 	// but standard unmarshal over struct fields handles JSON null for strings by leaving existing or setting zero-value if unmarshaling map/struct.
 	// Let's ensure string fields default properly if JSON has explicitly `null`.
 	var aux struct {
-		Port              *int      `json:"port"`
-		Host              *string   `json:"host"`
-		RetryAttempts     *int      `json:"retry_attempts"`
-		RetryDelaySec     *int      `json:"retry_delay_sec"`
-		RequestTimeoutSec *int      `json:"request_timeout_sec"`
-		GeminiBL          *string   `json:"gemini_bl"`
-		AuthUser          *string   `json:"auth_user"`
-		XSRFToken         *string   `json:"xsrf_token"`
-		DefaultModel      *string   `json:"default_model"`
-		LogRequests       *bool     `json:"log_requests"`
-		CookieFile        *string   `json:"cookie_file"`
-		Proxy             *string   `json:"proxy"`
-		APIKeys           *[]string `json:"api_keys"`
-		Impersonate       *string   `json:"impersonate"`
-		TemporaryChats    *bool     `json:"temporary_chats"`
+		Port               *int      `json:"port"`
+		Host               *string   `json:"host"`
+		RetryAttempts      *int      `json:"retry_attempts"`
+		RetryDelaySec      *int      `json:"retry_delay_sec"`
+		RequestTimeoutSec  *int      `json:"request_timeout_sec"`
+		GeminiBL           *string   `json:"gemini_bl"`
+		AuthUser           *string   `json:"auth_user"`
+		XSRFToken          *string   `json:"xsrf_token"`
+		DefaultModel       *string   `json:"default_model"`
+		LogRequests        *bool     `json:"log_requests"`
+		CookieFile         *string   `json:"cookie_file"`
+		Proxy              *string   `json:"proxy"`
+		APIKeys            *[]string `json:"api_keys"`
+		Impersonate        *string   `json:"impersonate"`
+		TemporaryChats     *bool     `json:"temporary_chats"`
+		ToolSchemaMaxBytes *int      `json:"tool_schema_max_bytes"`
 	}
 
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -124,6 +133,9 @@ func Load(path string) (Config, error) {
 	}
 	if aux.TemporaryChats != nil {
 		cfg.TemporaryChats = *aux.TemporaryChats
+	}
+	if aux.ToolSchemaMaxBytes != nil {
+		cfg.ToolSchemaMaxBytes = *aux.ToolSchemaMaxBytes
 	}
 
 	return cfg, nil

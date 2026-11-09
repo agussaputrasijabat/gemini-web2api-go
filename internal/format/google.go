@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"log"
 	"strings"
 
 	"github.com/ikhsan3adi/gemini-web2api/internal/models"
@@ -17,22 +17,26 @@ type Image struct {
 }
 
 func BuildToolPrompt(defs []models.GoogleFunctionDeclaration) string {
-	specBytes, _ := json.Marshal(defs)
-	// Tool slimming: if tool definitions exceed 30KB, re-marshal with name+description only.
-	if len(specBytes) > 30000 {
-		slimmed := make([]models.GoogleFunctionDeclaration, len(defs))
-		for i, d := range defs {
-			slimmed[i] = models.GoogleFunctionDeclaration{
-				Name:        d.Name,
-				Description: d.Description,
-			}
-		}
-		specBytes, _ = json.Marshal(slimmed)
+	return BuildToolPromptWithOptions(defs, DefaultToolOptions())
+}
+
+// BuildToolPromptWithOptions renders Gemini function declarations into the
+// prompt under an explicit schema byte budget.
+//
+// Compression replaces the old name+description-only fallback: the JSON Schema
+// (type, properties, required, enum, items, additionalProperties) is always
+// kept, because without it the model cannot know argument names.
+func BuildToolPromptWithOptions(defs []models.GoogleFunctionDeclaration, opts ToolOptions) string {
+	specBytes, level := CompressGoogleFunctionDeclarations(defs, opts.MaxSchemaBytes)
+	if level != SchemaKeepAll {
+		log.Printf("Google tool defs compressed (level=%s, %d bytes, %d declarations)",
+			level, len(specBytes), len(defs))
 	}
 	return fmt.Sprintf(
 		"# Tool Use\n\n"+
 			"You can call the following tools to help accomplish tasks. "+
-			"These tools connect to the user's local environment and will execute when called.\n\n"+
+			"These tools connect to the user's local environment and will execute when called.\n"+
+			"Each tool's `parameters` is a JSON Schema; argument names and types MUST conform to it.\n\n"+
 			"Call format (use this exact format):\n"+
 			"```function_call\n"+
 			"{\"name\": \"<tool_name>\", \"args\": {<arguments>}}\n"+
@@ -73,6 +77,21 @@ func GoogleToolChoiceInstruction(req models.GoogleGenerateRequest) string {
 }
 
 func GoogleContentsToPrompt(req models.GoogleGenerateRequest) (string, []Image, error) {
+	return GoogleContentsToPromptWithOptions(req, DefaultToolOptions())
+}
+
+// GoogleContentsToPromptWithOptions converts native Gemini contents into a
+// prompt, preserving functionCall/functionResponse roundtrips.
+//
+// Roundtrip rules, mirroring the native API contract:
+//   - a model part with functionCall is rendered as a function_call block so
+//     the model sees its own earlier call, including the call id when present;
+//   - a user part with functionResponse is rendered as a tool result keyed by
+//     the call id (Gemini 3.x requires the id to match the call, otherwise the
+//     model can return an empty STOP response);
+//   - thoughtSignature is opaque and cannot be replayed through a text prompt,
+//     so it is logged at debug level and otherwise ignored.
+func GoogleContentsToPromptWithOptions(req models.GoogleGenerateRequest, opts ToolOptions) (string, []Image, error) {
 	var parts []string
 	var images []Image
 
@@ -102,13 +121,13 @@ func GoogleContentsToPrompt(req models.GoogleGenerateRequest) (string, []Image, 
 	if sysText != "" {
 		if len(toolDefs) > 0 {
 			constraint := GoogleToolChoiceInstruction(req)
-			parts = append(parts, sysText+"\n\n"+BuildToolPrompt(toolDefs)+constraint)
+			parts = append(parts, sysText+"\n\n"+BuildToolPromptWithOptions(toolDefs, opts)+constraint)
 		} else {
 			parts = append(parts, sysText)
 		}
 	} else if len(toolDefs) > 0 {
 		constraint := GoogleToolChoiceInstruction(req)
-		parts = append(parts, BuildToolPrompt(toolDefs)+constraint)
+		parts = append(parts, BuildToolPromptWithOptions(toolDefs, opts)+constraint)
 	}
 
 	for _, content := range req.Contents {
@@ -136,14 +155,29 @@ func GoogleContentsToPrompt(req models.GoogleGenerateRequest) (string, []Image, 
 					args = map[string]any{}
 				}
 				payload, _ := json.Marshal(map[string]any{"name": p.FunctionCall.Name, "args": args})
-				msgParts = append(msgParts, fmt.Sprintf("```function_call\n%s\n```", string(payload)))
+				block := fmt.Sprintf("```function_call\n%s\n```", string(payload))
+				if p.FunctionCall.ID != "" {
+					// Keep the id visible so the following functionResponse can
+					// be paired unambiguously in later turns.
+					block += fmt.Sprintf("\n[call_id: %s]", p.FunctionCall.ID)
+				}
+				msgParts = append(msgParts, block)
 			} else if p.FunctionResponse != nil {
 				resp := p.FunctionResponse.Response
 				if resp == nil {
 					resp = map[string]any{}
 				}
 				payload, _ := json.Marshal(resp)
-				msgParts = append(msgParts, fmt.Sprintf("[Tool result for %s]: %s", p.FunctionResponse.Name, string(payload)))
+				// Prefer the call id as the label; Gemini 3.x pairs responses to
+				// calls by id and rejects mismatches with an empty STOP answer.
+				label := p.FunctionResponse.ID
+				if label == "" {
+					label = p.FunctionResponse.Name
+				}
+				if label == "" {
+					label = "unknown"
+				}
+				msgParts = append(msgParts, fmt.Sprintf("[Tool result for %s]: %s", label, string(payload)))
 			}
 		}
 
@@ -158,63 +192,31 @@ func GoogleContentsToPrompt(req models.GoogleGenerateRequest) (string, []Image, 
 	return strings.Join(parts, "\n\n"), images, nil
 }
 
-var (
-	reFencedGoogleCall   = regexp.MustCompile(`(?s)\x60\x60\x60function_call\s*\n(.*?)\n\x60\x60\x60`)
-	reUnfencedGoogleCall = regexp.MustCompile(`(?s)(?:^|\n)function_call\s*\n(\{[^\x60]*?\})`)
-)
-
+// ParseGoogleFunctionCalls extracts native-Gemini function calls from model
+// output. It shares the tolerant extraction logic with ParseToolCalls but maps
+// to GoogleFunctionCall (map args, optional id).
+//
+// Returning an empty call list with the original text is the safe failure mode:
+// the caller should emit plain text rather than a fabricated call.
 func ParseGoogleFunctionCalls(text string) (string, []models.GoogleFunctionCall) {
+	clean, payloads := extractPayloads(text)
+	if len(payloads) == 0 {
+		trimmed := strings.TrimSpace(text)
+		if len(trimmed) > 2 && trimmed[0] == '{' {
+			if name, _, args, id, ok := parseCallPayload(trimmed); ok {
+				return "", []models.GoogleFunctionCall{{Name: name, Args: args, ID: id}}
+			}
+		}
+		return text, nil
+	}
+
 	var calls []models.GoogleFunctionCall
-	clean := text
-
-	for _, m := range reFencedGoogleCall.FindAllStringSubmatch(clean, -1) {
-		var data map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &data); err == nil {
-			if name, ok := data["name"].(string); ok && name != "" {
-				args, _ := data["args"].(map[string]any)
-				if args == nil {
-					args, _ = data["arguments"].(map[string]any)
-				}
-				if args == nil {
-					args = map[string]any{}
-				}
-				calls = append(calls, models.GoogleFunctionCall{Name: name, Args: args})
-			}
+	for _, payload := range payloads {
+		name, _, args, id, ok := parseCallPayload(payload)
+		if !ok {
+			continue
 		}
-	}
-	clean = strings.TrimSpace(reFencedGoogleCall.ReplaceAllString(clean, ""))
-
-	for _, m := range reUnfencedGoogleCall.FindAllStringSubmatch(clean, -1) {
-		var data map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &data); err == nil {
-			if name, ok := data["name"].(string); ok && name != "" {
-				args, _ := data["args"].(map[string]any)
-				if args == nil {
-					args, _ = data["arguments"].(map[string]any)
-				}
-				if args == nil {
-					args = map[string]any{}
-				}
-				calls = append(calls, models.GoogleFunctionCall{Name: name, Args: args})
-			}
-		}
-	}
-	clean = strings.TrimSpace(reUnfencedGoogleCall.ReplaceAllString(clean, ""))
-
-	if len(calls) == 0 && strings.HasPrefix(strings.TrimSpace(clean), "{") {
-		var data map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(clean)), &data); err == nil {
-			if name, ok := data["name"].(string); ok && name != "" {
-				args, hasArgs := data["args"].(map[string]any)
-				if !hasArgs {
-					args, hasArgs = data["arguments"].(map[string]any)
-				}
-				if hasArgs {
-					calls = append(calls, models.GoogleFunctionCall{Name: name, Args: args})
-					clean = ""
-				}
-			}
-		}
+		calls = append(calls, models.GoogleFunctionCall{Name: name, Args: args, ID: id})
 	}
 
 	return clean, calls
