@@ -11,6 +11,8 @@
 
 这是对原始版本的完全 Go 重写[Python gemini-web2api](https://github.com/Sophomoresty/gemini-web2api)。它具有巨大的并发吞吐量、最小的内存占用以及增强的功能，例如**TLS 模拟**用于WAF绕过。
 
+> **Fork 说明**：本仓库 fork 自 [ikhsan3adi/gemini-web2api](https://github.com/ikhsan3adi/gemini-web2api)（Go 重写版），其上游是 [Sophomoresty/gemini-web2api](https://github.com/Sophomoresty/gemini-web2api)（原始 Python 项目）。原始代码与主要工作归原作者所有；本 fork 仅在此基础上更新 Gemini 4 模型阵容并做本地修复。
+
 ## 主要特点
 
 * **可选 API 密钥**: 没有授权时`api_keys`配置后为空，OpenAI 风格的承载身份验证。
@@ -350,6 +352,13 @@ gemini-web2api.exe
 * **不是真正的 Pro/Ultra**：没有付费订阅 cookie，`gemini-4-neon`和`gemini-4-carbon`会被上游静默切换到 Hydrogen 或 Flash-Lite。模型选择器不是可以绕过的后端开关。
 * **仅单圈**：每个请求都是一个独立的对话。通过在提示中包含先前的消息来模拟多轮上下文。
 * **速率限制**：Google 可能会限制高频请求。服务器会自动重试，但持续的大量使用可能会被阻止。
+
+## 致谢
+
+- [Sophomoresty/gemini-web2api](https://github.com/Sophomoresty/gemini-web2api) — 原始 Python 项目。
+- [ikhsan3adi/gemini-web2api](https://github.com/ikhsan3adi/gemini-web2api) — 本仓库所 fork 的 Go 重写版。
+
+项目名称和 logo 均来自原始项目。
 
 ## 执照
 

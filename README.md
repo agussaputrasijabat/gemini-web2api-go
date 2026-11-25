@@ -10,6 +10,8 @@ High-performance Go proxy converting Google Gemini's web interface into an OpenA
 
 This is a complete Go rewrite of the original [Python gemini-web2api](https://github.com/Sophomoresty/gemini-web2api). It features massive concurrency throughput, minimal memory footprint, and enhanced capabilities such as **TLS Impersonation** for WAF bypass.
 
+> **Fork notice**: This repository is a fork of [ikhsan3adi/gemini-web2api](https://github.com/ikhsan3adi/gemini-web2api), the Go rewrite. That project is itself a Go rewrite of the original [Sophomoresty/gemini-web2api](https://github.com/Sophomoresty/gemini-web2api) Python project. All original work and credit belong to their authors; this fork only adds the Gemini 4 model lineup and local fixes.
+
 ## Key Features
 
 - **Optional API Keys**: No auth when `api_keys` is empty, OpenAI-style Bearer auth when configured.
@@ -348,6 +350,13 @@ gemini-web2api.exe
 - **Not real Pro/Ultra**: Without a paid subscription cookie, `gemini-4-neon` and `gemini-4-carbon` are silently switched upstream to Hydrogen or Flash-Lite. The model picker is not a backend switch you can bypass.
 - **Single-turn only**: Each request is an independent conversation. Multi-turn context is simulated by including previous messages in the prompt.
 - **Rate limits**: Google may throttle high-frequency requests. The server retries automatically but sustained heavy use may be blocked.
+
+## Credits
+
+- [Sophomoresty/gemini-web2api](https://github.com/Sophomoresty/gemini-web2api) — the original Python project.
+- [ikhsan3adi/gemini-web2api](https://github.com/ikhsan3adi/gemini-web2api) — the Go rewrite this repository is forked from.
+
+The project name and logo come from the original project.
 
 ## License
 
