@@ -19,75 +19,189 @@ type Model struct {
 	Extra  map[int]any `json:"extra,omitempty"`
 }
 
+// Upstream routing hex ids from Gemini's otAQ7b model catalog. The web app
+// selects a model by sending this id in x-goog-ext-525001261-jspb; the legacy
+// MODE_CATEGORY value still travels in payload index 79.
+const (
+	headerHydrogen  = "56fdd199312815e2" // 4 Hydrogen (same slot as the old 3.8 Flash)
+	headerNeon      = "e6fa609c3fa255c0" // 4 Neon (took over 3.1 Pro's slot)
+	headerCarbon    = "95a4c0abcba24364" // 4 Carbon (formerly 4 Argon)
+	headerFlashLite = "cf41b0e0dd7d53e5" // 3.5 Flash-Lite / Auto
+)
+
 var MODELS = map[string]Model{
+	// Current Gemini 4 web lineup.
+	"gemini-4-hydrogen": {
+		Mode:   1,
+		Think:  4,
+		Header: headerHydrogen,
+		Desc:   "Gemini 4 Hydrogen — fast all-around model (needs a signed-in Google cookie)",
+	},
+	"gemini-4-hydrogen-thinking": {
+		Mode:   1,
+		Think:  0,
+		Header: headerHydrogen,
+		Desc:   "Gemini 4 Hydrogen with extended thinking",
+		Extra:  map[int]any{80: 2},
+	},
+	"gemini-4-neon": {
+		Mode:   3,
+		Think:  4,
+		Header: headerNeon,
+		Desc:   "Gemini 4 Neon — frontier-level coding and analysis at lower cost (needs a paid/Ultra Google cookie)",
+	},
+	"gemini-4-neon-thinking": {
+		Mode:   3,
+		Think:  0,
+		Header: headerNeon,
+		Desc:   "Gemini 4 Neon with extended thinking",
+		Extra:  map[int]any{80: 2},
+	},
+	"gemini-4-carbon": {
+		Mode:   8,
+		Think:  4,
+		Header: headerCarbon,
+		Desc:   "Gemini 4 Carbon — strongest model for complex tasks (needs a paid/Ultra Google cookie)",
+		// inner[49]=40 is the browser parameter that keeps mode 8 from
+		// hanging; upstream currently trades the thinking tier for it.
+		Extra: map[int]any{49: 40},
+	},
+	"gemini-4-carbon-thinking": {
+		Mode:   8,
+		Think:  0,
+		Header: headerCarbon,
+		Desc:   "Gemini 4 Carbon with extended thinking (currently answers at the normal tier)",
+		Extra:  map[int]any{49: 40, 80: 2},
+	},
+	"gemini-4-carbon-thinking-medium": {
+		Mode:   8,
+		Think:  0,
+		Header: headerCarbon,
+		Desc:   "Gemini 4 Carbon at the Medium thinking tier (no reasoning_content)",
+		Extra:  map[int]any{49: 40, 80: 4},
+	},
+
+	// Element-name aliases kept for clients that adopted the first rename.
 	"gemini-4-argon": {
 		Mode:   8,
 		Think:  4,
-		Header: "95a4c0abcba24364",
-		Desc:   "Frontier model for complex tasks (Gemini 4 Argon, requires Google AI Pro cookie)",
+		Header: headerCarbon,
+		Desc:   "Alias for gemini-4-carbon (upstream renamed 4 Argon to 4 Carbon)",
+		Extra:  map[int]any{49: 40},
+	},
+	"gemini-4-argon-thinking": {
+		Mode:   8,
+		Think:  0,
+		Header: headerCarbon,
+		Desc:   "Alias for gemini-4-carbon-thinking",
+		Extra:  map[int]any{49: 40, 80: 2},
+	},
+	"gemini-4-argon-thinking-medium": {
+		Mode:   8,
+		Think:  0,
+		Header: headerCarbon,
+		Desc:   "Alias for gemini-4-carbon-thinking-medium",
+		Extra:  map[int]any{49: 40, 80: 4},
 	},
 	"argon": {
 		Mode:   8,
 		Think:  4,
-		Header: "95a4c0abcba24364",
-		Desc:   "Alias for gemini-4-argon",
+		Header: headerCarbon,
+		Desc:   "Alias for gemini-4-carbon",
+		Extra:  map[int]any{49: 40},
 	},
 	"gemini-4": {
 		Mode:   8,
 		Think:  4,
-		Header: "95a4c0abcba24364",
-		Desc:   "Alias for gemini-4-argon",
+		Header: headerCarbon,
+		Desc:   "Alias for gemini-4-carbon",
+		Extra:  map[int]any{49: 40},
 	},
+
+	// Legacy versioned names. Upstream upgraded these routes in place, so they
+	// now resolve to the current Gemini 4 models instead of disappearing.
 	"gemini-3.8-flash": {
-		Mode:  1,
-		Think: 4,
-		Desc:  "Latest all-around model (Gemini 3.8 Flash)",
+		Mode:   1,
+		Think:  4,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen",
 	},
 	"gemini-3.7-flash": {
-		Mode:  1,
-		Think: 4,
-		Desc:  "All-around model (Gemini 3.7 Flash)",
+		Mode:   1,
+		Think:  4,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen",
 	},
 	"gemini-3.6-flash": {
-		Mode:  1,
-		Think: 4,
-		Desc:  "All-around model (Gemini 3.6 Flash)",
+		Mode:   1,
+		Think:  4,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen (previous default)",
+	},
+	"gemini-3.6-flash-thinking": {
+		Mode:   1,
+		Think:  0,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen-thinking",
+		Extra:  map[int]any{80: 2},
 	},
 	"gemini-3.5-flash": {
-		Mode:  1,
-		Think: 4,
-		Desc:  "Alias for gemini-3.6-flash (backend upgraded)",
+		Mode:   1,
+		Think:  4,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen",
 	},
 	"gemini-3.5-flash-thinking": {
-		Mode:  2,
-		Think: 0,
-		Desc:  "Deep thinking mode, longest output (~20k chars)",
-	},
-	"gemini-3.1-pro": {
-		Mode:  3,
-		Think: 4,
-		Desc:  "Pro model (requires cookie for real routing)",
-	},
-	"gemini-3.1-pro-enhanced": {
-		Mode:  3,
-		Think: 4,
-		Desc:  "Pro with enhanced output (experimental)",
-		Extra: map[int]any{31: 2, 80: 3},
-	},
-	"gemini-auto": {
-		Mode:  4,
-		Think: 4,
-		Desc:  "Auto model selection",
+		Mode:   1,
+		Think:  0,
+		Header: headerHydrogen,
+		Desc:   "Legacy name for gemini-4-hydrogen-thinking",
+		Extra:  map[int]any{80: 2},
 	},
 	"gemini-3.5-flash-thinking-lite": {
-		Mode:  5,
-		Think: 0,
-		Desc:  "Dynamic thinking with adaptive depth",
+		Mode:   6,
+		Think:  0,
+		Header: headerFlashLite,
+		Desc:   "Legacy adaptive-thinking route (now 3.5 Flash-Lite)",
+		Extra:  map[int]any{80: 2},
+	},
+	"gemini-3.1-pro": {
+		Mode:   3,
+		Think:  4,
+		Header: headerNeon,
+		Desc:   "Legacy name for gemini-4-neon",
+	},
+	"gemini-3.1-pro-thinking": {
+		Mode:   3,
+		Think:  0,
+		Header: headerNeon,
+		Desc:   "Legacy name for gemini-4-neon-thinking",
+		Extra:  map[int]any{80: 2},
+	},
+	"gemini-3.1-pro-enhanced": {
+		Mode:   3,
+		Think:  0,
+		Header: headerNeon,
+		Desc:   "Legacy name for gemini-4-neon-thinking (experimental)",
+		Extra:  map[int]any{80: 2},
+	},
+	"gemini-auto": {
+		Mode:   6,
+		Think:  4,
+		Header: headerFlashLite,
+		Desc:   "Auto model selection (currently 3.5 Flash-Lite)",
+	},
+	"gemini-3.5-flash-lite": {
+		Mode:   6,
+		Think:  4,
+		Header: headerFlashLite,
+		Desc:   "Alias for gemini-flash-lite",
 	},
 	"gemini-flash-lite": {
-		Mode:  6,
-		Think: 4,
-		Desc:  "Lightweight fast model",
+		Mode:   6,
+		Think:  4,
+		Header: headerFlashLite,
+		Desc:   "Lightweight fast model (3.5 Flash-Lite)",
 	},
 }
 
@@ -171,7 +285,7 @@ type Resolved struct {
 	Effort string
 }
 
-const DefaultModelName = "gemini-3.6-flash"
+const DefaultModelName = "gemini-4-hydrogen"
 
 // Names returns every configured model id in sorted order. Output is
 // deterministic so /v1/models responses are diffable and caches stable.

@@ -41,7 +41,7 @@ func Default() Config {
 		GeminiBL:           "boq_assistant-bard-web-server_20260716.08_p0",
 		AuthUser:           "",
 		XSRFToken:          "",
-		DefaultModel:       "gemini-3.6-flash",
+		DefaultModel:       "gemini-4-hydrogen",
 		LogRequests:        true,
 		CookieFile:         "",
 		Proxy:              "",

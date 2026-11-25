@@ -17,7 +17,7 @@ This is a complete Go rewrite of the original [Python gemini-web2api](https://gi
 - **Multimodal (Vision)**: Fully supports sending images (`image_url` / base64) to Gemini using Scotty Resumable Upload protocol natively with built-in image compression.
 - **TLS Impersonation**: Built-in support to bypass Cloudflare/WAF by mimicking Chrome/Edge TLS fingerprints using `tls-client` 🔥.
 - **Tool Calling**: Full function calling support (OpenAI format).
-- **Multiple Models**: Flash (3.6), Extended Thinking (20k+ char output), Pro, Auto, Lite.
+- **Multiple Models**: Gemini 4 Hydrogen, Neon and Carbon, plus extended thinking, Auto and Flash-Lite.
 - **Thinking Depth**: Adjustable reasoning via `@think=N` suffix (0=deepest, 4=shallowest).
 - **Web Search**: Built-in internet access (Gemini's native search).
 - **High Performance**: Pure Go static binary with high concurrent SSE streaming throughput and minimal memory footprint.
@@ -122,7 +122,7 @@ docker compose up -d
 | -------- | ------------------------------------------------------------------- |
 | Base URL | `http://localhost:8081/v1`                                          |
 | API Key  | any `api_keys` value from `config.json`; anything if not configured |
-| Model    | `gemini-3.5-flash-thinking`                                         |
+| Model    | `gemini-4-hydrogen`                                                 |
 
 ### curl
 
@@ -132,13 +132,13 @@ docker compose up -d
 curl http://localhost:8081/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-your-key" \
-  -d '{"model":"gemini-3.5-flash","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{"model":"gemini-4-hydrogen","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
 #### PowerShell (Windows)
 
 ```powershell
-curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-key" -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
+curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-key" -d "{\"model\":\"gemini-4-hydrogen\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
 ```
 
 > Note: On Windows PowerShell, use `curl.exe` and `--%` so PowerShell does not reinterpret JSON quoting or curl options.
@@ -149,7 +149,7 @@ curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: applica
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8081/v1", api_key="sk-your-key")
 resp = client.chat.completions.create(
-    model="gemini-3.5-flash-thinking",
+    model="gemini-4-hydrogen-thinking",
     messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
 print(resp.choices[0].message.content)
@@ -171,41 +171,49 @@ Supports Google native API endpoints:
 
 ## Available Models
 
-| Model                            | Description                                  | Output          |
-| -------------------------------- | -------------------------------------------- | --------------- |
-| `gemini-4-argon`                 | Frontier model for complex tasks (needs Pro) | **~20k+ chars** |
-| `argon`, `gemini-4`              | Aliases for gemini-4-argon                   | **~20k+ chars** |
-| `gemini-3.8-flash`               | Latest all-around model (Gemini 3.8 Flash)   | ~12k chars      |
-| `gemini-3.7-flash`               | All-around model (Gemini 3.7 Flash)          | ~12k chars      |
-| `gemini-3.6-flash`               | All-around model (Gemini 3.6 Flash)          | ~12k chars      |
-| `gemini-3.5-flash`               | Alias for gemini-3.6-flash                   | ~12k chars      |
-| `gemini-3.5-flash-thinking`      | Extended thinking, longest output            | **~20k chars**  |
-| `gemini-3.5-flash-thinking-lite` | Adaptive thinking depth                      | ~15k chars      |
-| `gemini-3.1-pro`                 | Advanced math & code (needs Pro cookie)      | ~12k chars      |
-| `gemini-auto`                    | Auto model selection                         | varies          |
-| `gemini-flash-lite`              | Fastest answers, lightweight                 | ~10k chars      |
+Gemini's web app replaced the Flash / Pro names with element codenames in late 2026. The current lineup is **Hydrogen** (all-around), **Neon** (deeper analysis) and **Carbon** (frontier, formerly Argon).
+
+| Model                                | Description                                                        | Output          |
+| ------------------------------------ | ------------------------------------------------------------------ | --------------- |
+| `gemini-4-hydrogen`                  | All-around model; any signed-in Google account                     | ~12k chars      |
+| `gemini-4-hydrogen-thinking`         | Hydrogen with extended thinking (High tier on paid accounts)       | **~20k chars**  |
+| `gemini-4-neon`                      | Deeper analysis; paid / Ultra cookie (took over 3.1 Pro)           | ~12k chars      |
+| `gemini-4-neon-thinking`             | Neon with extended thinking                                        | **~20k chars**  |
+| `gemini-4-carbon`                    | Frontier model for complex tasks; paid / Ultra cookie              | **~20k+ chars** |
+| `gemini-4-carbon-thinking`           | Carbon with extended thinking (currently answers at normal tier)   | **~20k+ chars** |
+| `gemini-4-carbon-thinking-medium`    | Carbon at the Medium thinking tier (no `reasoning_content`)        | **~20k+ chars** |
+| `gemini-4-argon`, `argon`, `gemini-4`| Aliases for `gemini-4-carbon`                                      | **~20k+ chars** |
+| `gemini-4-argon-thinking`            | Alias for `gemini-4-carbon-thinking`                               | **~20k+ chars** |
+| `gemini-3.1-pro`                     | Legacy name for `gemini-4-neon`                                    | ~12k chars      |
+| `gemini-3.1-pro-thinking`            | Legacy name for `gemini-4-neon-thinking`                           | **~20k chars**  |
+| `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash` | Legacy names for `gemini-4-hydrogen`          | ~12k chars      |
+| `gemini-3.5-flash-thinking`          | Legacy name for `gemini-4-hydrogen-thinking`                       | **~20k chars**  |
+| `gemini-auto`                        | Auto selection (currently 3.5 Flash-Lite)                          | varies          |
+| `gemini-3.5-flash-lite`, `gemini-flash-lite` | Fastest answers, lightweight                                | ~10k chars      |
+
+> The exact models available to you depend on the Google account behind the cookie. Anonymous requests are routed to 3.5 Flash-Lite. Free signed-in accounts get 4 Hydrogen; 4 Neon and 4 Carbon need a paid / Ultra account, otherwise upstream silently switches to another model.
 
 ### Thinking Depth
 
 Append `@think=N` to any model name to control reasoning logic (corresponds to the web UI Thinking level submenu):
 
 ```text
-gemini-4-argon@think=0              # High (deepest reasoning, default for thinking models)
-gemini-4-argon@think=2              # Medium
-gemini-4-argon@think=4              # Low (default for standard models)
+gemini-4-carbon@think=0             # High (deepest reasoning, default for thinking models)
+gemini-4-carbon@think=2             # Medium
+gemini-4-carbon@think=4             # Low (default for standard models)
 ```
 
 ### Model Inspection Headers
 
 Every API response (both JSON and streaming SSE) includes HTTP response headers indicating actual model routing:
-- `X-Resolved-Model`: The backend model identifier actually routed to (e.g. `gemini-4-argon`).
+- `X-Resolved-Model`: The backend model identifier actually routed to (e.g. `gemini-4-hydrogen`).
 - `X-Model-Fallback: true`: Included whenever an unmapped model was requested and fell back to the default model.
 
 ## Advanced Features (Go Exclusive)
 
 ### 1. Dynamic Model Discovery & Upstream Routing Headers
 
-When authenticated with account cookies, the proxy dynamically queries Gemini's `otAQ7b` RPC during startup to discover available models and account tier capacity. It attaches the required upstream routing headers (`x-goog-ext-525001261-jspb`) matching web application behavior, allowing models like Gemini 4 Argon to route properly.
+When authenticated with account cookies, the proxy dynamically queries Gemini's `otAQ7b` RPC during startup to discover available models and account tier capacity. It attaches the required upstream routing headers (`x-goog-ext-525001261-jspb`) matching web application behavior, so models like Gemini 4 Hydrogen, Neon and Carbon route properly. Carbon also sends the browser parameter that keeps its mode-8 route from hanging.
 
 ### 2. Vision / Multimodal Uploads
 
@@ -223,9 +231,9 @@ If you run this tool in datacenters (like AWS/DigitalOcean) where Google blocks 
 
 Or in `config.json`: `"impersonate": "chrome_120"`. Supported profiles include `chrome_112` to `chrome_130`, `edge`, and `safari`.
 
-## Optional: Cookie for Pro and Argon
+## Optional: Cookie for Hydrogen, Neon and Carbon
 
-Anonymous access works for Flash models, but `gemini-4-argon` and `gemini-3.1-pro` require an authenticated **Google AI Pro / Advanced** account session. Without authentication, upstream routes requests to Flash.
+Anonymous access works but is routed to 3.5 Flash-Lite. `gemini-4-hydrogen` needs a signed-in Google account (free accounts work); `gemini-4-neon` and `gemini-4-carbon` need a paid **Google AI Pro / Ultra** account session. Without the required authentication upstream silently switches to a lower model.
 
 ```bash
 ./gemini-web2api --cookie-file gemini-auth.json
@@ -273,7 +281,7 @@ Example:
 
 If authenticated requests return HTTP 400 with an `xsrf` error, refresh Gemini Web, update `xsrf_token`, and make sure `auth_user` matches the `/u/<index>/` part of the browser URL.
 
-Pro routing requires **Gemini Advanced** (paid subscription). A free Google account cookie will authenticate but silently fall back to Flash.
+Neon and Carbon routing requires a paid **Google AI Pro / Ultra** subscription. A free Google account cookie will authenticate but silently fall back to Hydrogen or Flash-Lite.
 
 ## Configuration
 
@@ -337,7 +345,7 @@ gemini-web2api.exe
 
 ## Limitations
 
-- **Not real Pro/Ultra**: Without a paid subscription cookie, `gemini-3.1-pro` routes to the same Flash model. The "Pro" label is a UI preference, not a backend model switch.
+- **Not real Pro/Ultra**: Without a paid subscription cookie, `gemini-4-neon` and `gemini-4-carbon` are silently switched upstream to Hydrogen or Flash-Lite. The model picker is not a backend switch you can bypass.
 - **Single-turn only**: Each request is an independent conversation. Multi-turn context is simulated by including previous messages in the prompt.
 - **Rate limits**: Google may throttle high-frequency requests. The server retries automatically but sustained heavy use may be blocked.
 

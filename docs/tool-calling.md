@@ -194,7 +194,7 @@ di-roundtrip lewat `[call_id: ...]`. Untuk model yang strict, ini **tidak terver
 ```json
 {
   "port": 8081,
-  "default_model": "gemini-3.6-flash",
+  "default_model": "gemini-4-hydrogen",
   "api_keys": ["sk-gemini"],
   "tool_schema_max_bytes": 30000
 }

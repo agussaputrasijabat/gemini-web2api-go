@@ -163,9 +163,14 @@ func (a *App) streamChat(
 	}
 
 	gate := newToolStreamGate(toolsActive)
+	sentContent := false
 	emitErr := a.Gem.GenerateStream(ctx, prompt, gemOpt, fileRefs, func(delta string) error {
 		return gate.Feed(delta, func(passthrough string) error {
-			return streamer.Content(passthrough)
+			if err := streamer.Content(passthrough); err != nil {
+				return err
+			}
+			sentContent = true
+			return nil
 		})
 	})
 
@@ -174,7 +179,18 @@ func (a *App) streamChat(
 		// Flush whatever we buffered so the client is not left hanging, then
 		// terminate the stream without a finish_reason claim we cannot honour.
 		if flushed := gate.Pending(); flushed != "" {
-			_ = streamer.Content(flushed)
+			if err := streamer.Content(flushed); err == nil {
+				sentContent = true
+			}
+		}
+		if !sentContent {
+			// Nothing reached the client yet, so surface the upstream failure
+			// instead of a 200 stream that looks like an empty answer.
+			_ = writeSSEData(w, map[string]any{
+				"error": map[string]any{"message": fmt.Sprintf("upstream error: %v", emitErr)},
+			})
+			_ = writeSSEDone(w)
+			return
 		}
 		stop := "stop"
 		_ = writeSSEData(w, streamer.baseChunk(&models.OpenAIDeltaMessage{}, &stop))

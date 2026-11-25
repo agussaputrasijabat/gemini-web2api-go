@@ -256,6 +256,20 @@ func asInt(v any) (int, bool) {
 	return int(f), true
 }
 
+// intValue accepts JSON numbers as well as the plain Go ints used by model
+// overrides, so header/payload slots can share one helper.
+func intValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
 func firstString(vs ...any) string {
 	for _, v := range vs {
 		if s, ok := v.(string); ok && s != "" {
@@ -317,9 +331,13 @@ func (c *Client) resolveModelHeader(opt ModelOptions, reqUUID string) (string, i
 	if capFld == 13 {
 		hdr = append(hdr, nil)
 	}
+	// Header slot 15 mirrors the web UI thinking tier: 1=normal, 2=extended,
+	// 4=medium. Model overrides carry that value in payload slot 80.
 	thinkingTail := 1
-	if opt.Extra != nil && opt.Extra[80] == 2 {
-		thinkingTail = 2
+	if opt.Extra != nil {
+		if v, ok := intValue(opt.Extra[80]); ok && v > 0 {
+			thinkingTail = v
+		}
 	}
 	hdr = append(hdr, capVal, nil, nil, targetNum, thinkingTail, reqUUID)
 

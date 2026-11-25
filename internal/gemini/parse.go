@@ -10,7 +10,10 @@ import (
 var (
 	reCodeExec    = regexp.MustCompile(`(?s)\x60\x60\x60(?:python|javascript|text)\?code_(?:reference|stdout)&code_event_index=\d+\n.*?\x60\x60\x60\n?`)
 	reCardContent = regexp.MustCompile(`http://googleusercontent\.com/card_content/\d+\n?`)
-	reBardError   = regexp.MustCompile(`BardErrorInfo\s*\[(\d+)\]`)
+	// BardErrorInfo appears both as the legacy `BardErrorInfo [1024]` text and
+	// as the current protobuf-like JSON: BardErrorInfo",[1061,null,"message"].
+	reBardError    = regexp.MustCompile(`BardErrorInfo(?:"\s*,\s*\[|\s*\[)\s*(\d+)`)
+	reBardErrorMsg = regexp.MustCompile(`BardErrorInfo"\s*,\s*\[\s*\d+\s*,\s*null\s*,\s*"([^"]*)"`)
 )
 
 func CleanText(text string, strip bool) string {
@@ -82,8 +85,21 @@ func IsBardError(raw string) (string, bool) {
 	return "", false
 }
 
+// BardErrorMessage returns the human-readable message that accompanies a
+// BardErrorInfo frame, when upstream provides one.
+func BardErrorMessage(raw string) string {
+	match := reBardErrorMsg.FindStringSubmatch(raw)
+	if len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	return ""
+}
+
 func ExtractResponseText(raw string) (string, error) {
 	if code, ok := IsBardError(raw); ok {
+		if msg := BardErrorMessage(raw); msg != "" {
+			return "", fmt.Errorf("gemini upstream rejected request (BardErrorInfo %s): %s", code, msg)
+		}
 		return "", fmt.Errorf("gemini upstream rejected request: BardErrorInfo [%s]", code)
 	}
 

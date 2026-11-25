@@ -87,8 +87,8 @@ func TestResolveModelHeader(t *testing.T) {
 		},
 		{
 			ID:          "56fdd199312815e2",
-			Category:    "Flash",
-			Display:     "3.8 Flash",
+			Category:    "Hydrogen",
+			Display:     "4 Hydrogen",
 			Desc:        "All-around help",
 			Number:      1,
 			Capacity:    2,
@@ -164,5 +164,18 @@ func TestResolveModelHeader(t *testing.T) {
 	hdrThinkingEnabled, _ := client.resolveModelHeader(optThinkingEnabled, reqUUID)
 	if !strings.Contains(hdrThinkingEnabled, ",2,\"TEST-UUID-1234\"]") {
 		t.Errorf("expected thinking tail 2 in header, got %s", hdrThinkingEnabled)
+	}
+
+	// Case 6: Medium thinking tier (payload slot 80 = 4) must also land in
+	// header slot 15 so the upstream keeps the selected tier.
+	optThinkingMedium := ModelOptions{
+		ModelName:   "gemini-4-carbon-thinking-medium",
+		ModelID:     8,
+		ModelHeader: "95a4c0abcba24364",
+		Extra:       map[int]any{49: 40, 80: 4},
+	}
+	hdrThinkingMedium, _ := client.resolveModelHeader(optThinkingMedium, reqUUID)
+	if !strings.Contains(hdrThinkingMedium, ",4,\"TEST-UUID-1234\"]") {
+		t.Errorf("expected thinking tail 4 in header, got %s", hdrThinkingMedium)
 	}
 }

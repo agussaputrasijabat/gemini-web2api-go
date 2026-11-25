@@ -18,7 +18,7 @@
 * **多式联运（视觉）**：完全支持发送图像（`image_url`/base64) 到 Gemini，使用 Scotty 可恢复上传协议本机内置图像压缩。
 * **TLS 模拟**：内置支持通过模仿 Chrome/Edge TLS 指纹来绕过 Cloudflare/WAF`tls-client`🔥.
 * **工具调用**：全函数调用支持（OpenAI格式）。
-* **多种型号**：Flash (3.6)、Extend Thinking（20k+ 字符输出）、Pro、Auto、Lite。
+* **多种型号**：Gemini 4 Hydrogen、Neon、Carbon，以及延伸思维、Auto 和 Flash-Lite。
 * **思考深度**：可通过调整推理`@think=N`后缀（0=最深，4=最浅）。
 * **网页搜索**：内置互联网访问（Gemini 的本机搜索）。
 * **高性能**：纯 Go 静态二进制文件，具有高并发 SSE 流吞吐量和最小的内存占用。
@@ -123,7 +123,7 @@ docker compose up -d
 | -------- | -------------------------------------------------------------------------------- |
 |基本网址 |`http://localhost:8081/v1`|
 | API 密钥 |任何`api_keys`价值来自`config.json`;如果没有配置的话，什么都可以|
-|型号|`gemini-3.5-flash-thinking`|
+|型号|`gemini-4-hydrogen`|
 
 ### 卷曲
 
@@ -133,13 +133,13 @@ docker compose up -d
 curl http://localhost:8081/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-your-key" \
-  -d '{"model":"gemini-3.5-flash","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{"model":"gemini-4-hydrogen","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
 #### PowerShell（Windows）
 
 ```powershell
-curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-key" -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
+curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-key" -d "{\"model\":\"gemini-4-hydrogen\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
 ```
 
 > 注意：在 Windows PowerShell 上，使用`curl.exe`和`--%`因此 PowerShell 不会重新解释 JSON 引用或curl 选项。
@@ -150,7 +150,7 @@ curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: applica
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8081/v1", api_key="sk-your-key")
 resp = client.chat.completions.create(
-    model="gemini-3.5-flash-thinking",
+    model="gemini-4-hydrogen-thinking",
     messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
 print(resp.choices[0].message.content)
@@ -172,42 +172,50 @@ gemini
 
 ## 可用型号
 
+Gemini 网页端在 2026 年末把 Flash / Pro 名称换成了元素代号。当前阵容是 **Hydrogen**（全能）、**Neon**（深度分析）和 **Carbon**（前沿，原 Argon）。
+
 |型号|描述 |输出|
 | -------------------------------- | ------------------------------------------------------------------ | --------------- |
-|`gemini-4-argon`|复杂任务的前沿模型（需要 Pro）|**~20k+ 字符**|
-|`argon`,`gemini-4`| Gemini-4-argon 的别名 |**~20k+ 字符**|
-|`gemini-3.8-flash`|最新全能机型（Gemini 3.8 Flash）|约 12k 个字符 |
-|`gemini-3.7-flash`|全能机型（Gemini 3.7 Flash）|约 12k 个字符 |
-|`gemini-3.6-flash`|全能机型（Gemini 3.6 Flash）|约 12k 个字符 |
-|`gemini-3.5-flash`| gemini-3.6-flash 的别名 |约 12k 个字符 |
-|`gemini-3.5-flash-thinking`|延伸思维，最长产出 |**约 20,000 个字符**|
-|`gemini-3.5-flash-thinking-lite`|适应性思维深度|约 15,000 个字符 |
-|`gemini-3.1-pro`|高级数学和代码（需要 Pro cookie）|约 12k 个字符 |
-|`gemini-auto`|汽车选型|变化 |
-|`gemini-flash-lite`|最快的答案，轻量级 | 〜10k 个字符 |
+|`gemini-4-hydrogen`|全能机型；任意已登录 Google 账号|约 12k 个字符|
+|`gemini-4-hydrogen-thinking`|Hydrogen 延伸思维（付费号有 High 档）|**约 20k 个字符**|
+|`gemini-4-neon`|深度分析；需要付费 / Ultra cookie（接替 3.1 Pro）|约 12k 个字符|
+|`gemini-4-neon-thinking`|Neon 延伸思维|**约 20k 个字符**|
+|`gemini-4-carbon`|复杂任务的前沿模型；需要付费 / Ultra cookie|**~20k+ 字符**|
+|`gemini-4-carbon-thinking`|Carbon 延伸思维（目前回普通档）|**~20k+ 字符**|
+|`gemini-4-carbon-thinking-medium`|Carbon 中等思维档（不返回 `reasoning_content`）|**~20k+ 字符**|
+|`gemini-4-argon`,`argon`,`gemini-4`|`gemini-4-carbon` 的别名|**~20k+ 字符**|
+|`gemini-4-argon-thinking`|`gemini-4-carbon-thinking` 的别名|**~20k+ 字符**|
+|`gemini-3.1-pro`|`gemini-4-neon` 的旧名称|约 12k 个字符|
+|`gemini-3.1-pro-thinking`|`gemini-4-neon-thinking` 的旧名称|**约 20k 个字符**|
+|`gemini-3.8-flash`,`gemini-3.7-flash`,`gemini-3.6-flash`,`gemini-3.5-flash`|`gemini-4-hydrogen` 的旧名称|约 12k 个字符|
+|`gemini-3.5-flash-thinking`|`gemini-4-hydrogen-thinking` 的旧名称|**约 20k 个字符**|
+|`gemini-auto`|自动选择（目前是 3.5 Flash-Lite）|变化|
+|`gemini-3.5-flash-lite`,`gemini-flash-lite`|最快的答案，轻量级|约 10k 个字符|
+
+> 实际可用模型取决于 cookie 背后的 Google 账号。匿名请求会路由到 3.5 Flash-Lite；免费登录号可用 4 Hydrogen；4 Neon 和 4 Carbon 需要付费 / Ultra 账号，否则上游会静默切换到其它模型。
 
 ### 思考深度
 
 附加`@think=N`任意模型名称来控制推理逻辑（对应Web UI Thinking级别子菜单）：
 
 ```text
-gemini-4-argon@think=0              # High (deepest reasoning, default for thinking models)
-gemini-4-argon@think=2              # Medium
-gemini-4-argon@think=4              # Low (default for standard models)
+gemini-4-carbon@think=0             # High (deepest reasoning, default for thinking models)
+gemini-4-carbon@think=2             # Medium
+gemini-4-carbon@think=4             # Low (default for standard models)
 ```
 
 ### 模型检查头
 
 每个 API 响应（JSON 和流式 SSE）都包含指示实际模型路由的 HTTP 响应标头：
 
-* `X-Resolved-Model`：实际路由到的后端模型标识符（例如`gemini-4-argon`).
+* `X-Resolved-Model`：实际路由到的后端模型标识符（例如`gemini-4-hydrogen`).
 * `X-Model-Fallback: true`：每当请求未映射的模型并回退到默认模型时都包含在内。
 
 ## 高级功能（独家）
 
 ### 1.动态模型发现和上游路由头
 
-当使用帐户 cookie 进行身份验证时，代理会动态查询 Gemini 的`otAQ7b`启动期间进行 RPC 以发现可用模型和帐户层容量。它附加所需的上游路由标头（`x-goog-ext-525001261-jspb`）匹配 Web 应用程序行为，允许 Gemini 4 Argon 等模型正确路由。
+当使用帐户 cookie 进行身份验证时，代理会动态查询 Gemini 的`otAQ7b`启动期间进行 RPC 以发现可用模型和帐户层容量。它附加所需的上游路由标头（`x-goog-ext-525001261-jspb`）匹配 Web 应用程序行为，让 Gemini 4 Hydrogen、Neon 和 Carbon 正确路由。Carbon 还会发送浏览器用于防止 mode 8 挂起的参数。
 
 ### 2. 视觉/多模式上传
 
@@ -225,9 +233,9 @@ gemini-4-argon@think=4              # Low (default for standard models)
 
 或者在`config.json`:`"impersonate": "chrome_120"`。支持的配置文件包括`chrome_112`到`chrome_130`,`edge`， 和`safari`.
 
-## 可选：Pro 和 Argon 的 Cookie
+## 可选：Hydrogen、Neon 和 Carbon 的 Cookie
 
-匿名访问适用于 Flash 模型，但是`gemini-4-argon`和`gemini-3.1-pro`需要经过身份验证**谷歌人工智能专业版/高级版**帐户会话。如果没有身份验证，上游会将请求路由到 Flash。
+匿名访问会被路由到 3.5 Flash-Lite。`gemini-4-hydrogen`需要已登录的 Google 账号（免费号即可）；`gemini-4-neon`和`gemini-4-carbon`需要付费 **Google AI Pro / Ultra** 账号。缺少对应权限时上游会静默切换到更低档的模型。
 
 ```bash
 ./gemini-web2api --cookie-file gemini-auth.json
@@ -275,7 +283,7 @@ https://gemini.google.com/u/1/app/...
 
 如果经过身份验证的请求返回 HTTP 400`xsrf`错误，刷新Gemini Web，更新`xsrf_token`，并确保`auth_user`匹配`/u/<index>/`浏览器 URL 的一部分。
 
-专业路由需要**双子座高级版**（付费订阅）。免费的 Google 帐户 cookie 将进行身份验证，但会默默地退回到 Flash。
+Neon 和 Carbon 路由需要付费 **Google AI Pro / Ultra** 订阅。免费的 Google 帐户 cookie 会通过身份验证，但上游会静默退回到 Hydrogen 或 Flash-Lite。
 
 ## 配置
 
@@ -339,7 +347,7 @@ gemini-web2api.exe
 
 ## 局限性
 
-* **不是真正的 Pro/Ultra**：没有付费订阅 cookie，`gemini-3.1-pro`路由到相同的 Flash 模型。 “Pro”标签是 UI 首选项，而不是后端模型开关。
+* **不是真正的 Pro/Ultra**：没有付费订阅 cookie，`gemini-4-neon`和`gemini-4-carbon`会被上游静默切换到 Hydrogen 或 Flash-Lite。模型选择器不是可以绕过的后端开关。
 * **仅单圈**：每个请求都是一个独立的对话。通过在提示中包含先前的消息来模拟多轮上下文。
 * **速率限制**：Google 可能会限制高频请求。服务器会自动重试，但持续的大量使用可能会被阻止。
 
