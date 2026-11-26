@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -80,41 +79,10 @@ type Client struct {
 }
 
 func NewClient(cfg config.Config) *Client {
-	var req Requester
 	// Impersonation and proxy are independent: the combination is the one that
 	// actually helps (clean IP + browser TLS fingerprint), so a configured proxy
-	// must not disable impersonation. getTLSClient passes the proxy down to
-	// tls-client's own dialer.
-	if cfg.Impersonate != "" {
-		tlsAdapter, err := getTLSClient(cfg.Impersonate, cfg.RequestTimeoutSec, cfg.Proxy)
-		if err != nil {
-			log.Printf("Failed to create TLS client for profile %s: %v, falling back to stdlib", cfg.Impersonate, err)
-		} else {
-			req = tlsAdapter
-		}
-	}
-
-	if req == nil {
-		transport := &http.Transport{
-			DisableCompression: true,
-		}
-
-		if cfg.Proxy != "" {
-			if proxyURL, err := url.Parse(cfg.Proxy); err == nil {
-				transport.Proxy = http.ProxyURL(proxyURL)
-			}
-		} else {
-			transport.Proxy = http.ProxyFromEnvironment
-		}
-
-		req = &http.Client{
-			Transport: transport,
-			Timeout:   time.Duration(cfg.RequestTimeoutSec) * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-	}
+	// must not disable impersonation.
+	req := newRequester(cfg)
 
 	logFn := func(format string, args ...any) {
 		if cfg.LogRequests {
@@ -361,6 +329,37 @@ func retryable(err error) bool {
 	return true
 }
 
+// proxyCount reports how many independent proxies back c.HTTP. A single
+// requester counts as one; a rotation pool reports its size.
+func (c *Client) proxyCount() int {
+	if pool, ok := c.HTTP.(interface{ Len() int }); ok {
+		if n := pool.Len(); n > 0 {
+			return n
+		}
+	}
+	return 1
+}
+
+// shouldRotateOn reports whether a terminal failure on the current proxy is
+// worth retrying through a different one. Auth and stale-BL failures are
+// global to the account/upstream, so rotating cannot help. An IP block or a
+// rate limit, however, is proxy-specific: when another proxy is available the
+// retry loop is allowed to advance the round-robin pool.
+func (c *Client) shouldRotateOn(err error) bool {
+	if c.proxyCount() < 2 {
+		return false
+	}
+	var ue *UpstreamError
+	if !errors.As(err, &ue) {
+		return false
+	}
+	switch ue.Kind {
+	case KindBlocked, KindRateLimited:
+		return true
+	}
+	return false
+}
+
 // maxBLRefreshPerRequest caps how many times one logical request may refresh
 // its build label. Two refreshes cover "config BL stale" plus "cache stale"
 // without allowing an unbounded loop if Google keeps answering 405.
@@ -485,12 +484,19 @@ func (c *Client) Generate(ctx context.Context, prompt string, opt ModelOptions, 
 					return "", blRefreshError(c.CurrentBL(),
 						fmt.Errorf("build label refreshed %d times and upstream still rejects it", blRefreshes))
 				}
-				// Blocked IP / auth failures are terminal: retrying from the
-				// same IP cannot change the outcome and prolongs the block.
+				// Auth failures are terminal. A block or rate limit is tied to
+				// one proxy IP, so with a rotation pool we let the retry loop
+				// advance to the next proxy instead of giving up globally.
 				if !retryable(terr) {
-					return "", terr
+					if c.shouldRotateOn(terr) && attempt < attempts-1 {
+						c.Logf("Proxy-specific upstream failure, retrying on next proxy")
+						lastErr = terr
+					} else {
+						return "", terr
+					}
+				} else {
+					lastErr = terr
 				}
-				lastErr = terr
 			} else {
 				rawBytes, err := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
@@ -593,9 +599,15 @@ func (c *Client) GenerateStream(ctx context.Context, prompt string, opt ModelOpt
 						fmt.Errorf("build label refreshed %d times and upstream still rejects it", blRefreshes))
 				}
 				if !retryable(terr) {
-					return terr
+					if c.shouldRotateOn(terr) && attempt < attempts-1 {
+						c.Logf("Proxy-specific upstream failure, retrying stream on next proxy")
+						lastErr = terr
+					} else {
+						return terr
+					}
+				} else {
+					lastErr = terr
 				}
-				lastErr = terr
 			} else {
 				err = c.streamAttempt(resp.Body, parser, emit)
 				_ = resp.Body.Close()

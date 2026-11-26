@@ -302,6 +302,7 @@ Create `config.json` in the same directory:
   "api_keys": ["sk-your-key"],
   "cookie_file": null,
   "proxy": null,
+  "proxies": [],
   "impersonate": null,
   "log_requests": true
 }
@@ -344,6 +345,47 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
 set HTTPS_PROXY=http://127.0.0.1:7890
 gemini-web2api.exe
 ```
+
+### Multiple proxies (round-robin)
+
+Use `proxies` to rotate every upstream request across several proxies. HTTP,
+HTTPS, SOCKS5, and SOCKS5H are supported. The legacy single `proxy` field still
+works and is used first when both are present.
+
+```json
+{
+  "proxies": [
+    "http://127.0.0.1:60000",
+    "socks5://user:pass@127.0.0.1:60001",
+    "http://proxy.example.com:8080"
+  ]
+}
+```
+
+Or pass the list on the command line. Both repeated flags and comma-separated
+values work:
+
+```bash
+./gemini-web2api \
+  --proxy http://127.0.0.1:60000 \
+  --proxy socks5://127.0.0.1:60001
+
+./gemini-web2api --proxies http://127.0.0.1:60000,socks5://127.0.0.1:60001
+```
+
+You can also set `GEMINI_WEB2API_PROXIES` (comma-separated). Precedence is CLI
+flags → `GEMINI_WEB2API_PROXIES` → `config.json`.
+
+Each proxy gets its own transport and connection pool; requests are selected
+with a lock-free round-robin counter. Retries for transport errors, HTTP 5xx,
+rate limits, and IP blocks advance to the next proxy automatically, while
+account-wide failures (invalid cookies, stale build label) do not rotate.
+Entries are validated, de-duplicated, and credentials are redacted from logs.
+
+> **Tip:** rotating IPs on every request can make Google treat an authenticated
+> cookie session as suspicious. If you use a signed-in account and see login or
+> captcha challenges, keep a single proxy or use a sticky session at your proxy
+> provider.
 
 ## Limitations
 

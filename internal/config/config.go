@@ -19,6 +19,7 @@ type Config struct {
 	LogRequests       bool     `json:"log_requests"`
 	CookieFile        string   `json:"cookie_file"`
 	Proxy             string   `json:"proxy"`
+	Proxies           []string `json:"proxies"`
 	APIKeys           []string `json:"api_keys"`
 	Impersonate       string   `json:"impersonate"`
 	TemporaryChats    bool     `json:"temporary_chats"`
@@ -79,6 +80,7 @@ func Load(path string) (Config, error) {
 		LogRequests        *bool     `json:"log_requests"`
 		CookieFile         *string   `json:"cookie_file"`
 		Proxy              *string   `json:"proxy"`
+		Proxies            *[]string `json:"proxies"`
 		APIKeys            *[]string `json:"api_keys"`
 		Impersonate        *string   `json:"impersonate"`
 		TemporaryChats     *bool     `json:"temporary_chats"`
@@ -124,6 +126,9 @@ func Load(path string) (Config, error) {
 	}
 	if aux.Proxy != nil {
 		cfg.Proxy = *aux.Proxy
+	}
+	if aux.Proxies != nil {
+		cfg.Proxies = *aux.Proxies
 	}
 	if aux.APIKeys != nil {
 		cfg.APIKeys = *aux.APIKeys

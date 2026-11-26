@@ -16,10 +16,33 @@ import (
 	"github.com/ikhsan3adi/gemini-web2api/internal/config"
 	"github.com/ikhsan3adi/gemini-web2api/internal/gemini"
 	"github.com/ikhsan3adi/gemini-web2api/internal/models"
+	proxypool "github.com/ikhsan3adi/gemini-web2api/internal/proxy"
 	"github.com/ikhsan3adi/gemini-web2api/internal/server"
 )
 
 var Version = "dev"
+
+// stringListFlag accepts a repeatable flag and also splits comma-separated
+// values, so both `--proxy a --proxy b` and `--proxy a,b` work.
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, splitProxyList(value)...)
+	return nil
+}
+
+func splitProxyList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
 
 func resolveVersion() string {
 	if Version != "" && Version != "dev" {
@@ -37,7 +60,9 @@ func main() {
 	portFlag := flag.Int("port", 0, "Server port")
 	configFlag := flag.String("config", "", "Config file path")
 	cookieFlag := flag.String("cookie-file", "", "Cookie file path")
-	proxyFlag := flag.String("proxy", "", "HTTP proxy URL")
+	var proxyFlags stringListFlag
+	flag.Var(&proxyFlags, "proxy", "Proxy URL (repeatable or comma-separated; requests rotate round-robin)")
+	flag.Var(&proxyFlags, "proxies", "Alias for --proxy (repeatable or comma-separated)")
 	impersonateFlag := flag.String("impersonate", "", "TLS impersonation profile")
 	versionFlag := flag.Bool("version", false, "Show version")
 	flag.Parse()
@@ -66,11 +91,27 @@ func main() {
 	if *cookieFlag != "" {
 		cfg.CookieFile = *cookieFlag
 	}
-	if *proxyFlag != "" {
-		cfg.Proxy = *proxyFlag
+	// Proxy precedence: CLI flags > GEMINI_WEB2API_PROXIES > config.json.
+	if len(proxyFlags) == 0 {
+		if env := os.Getenv("GEMINI_WEB2API_PROXIES"); strings.TrimSpace(env) != "" {
+			cfg.Proxy = ""
+			cfg.Proxies = splitProxyList(env)
+		}
+	} else {
+		cfg.Proxy = proxyFlags[0]
+		cfg.Proxies = append([]string(nil), proxyFlags[1:]...)
 	}
 	if *impersonateFlag != "" {
 		cfg.Impersonate = *impersonateFlag
+	}
+
+	if invalid := cfg.InvalidProxies(); len(invalid) > 0 {
+		redacted := make([]string, 0, len(invalid))
+		for _, entry := range invalid {
+			redacted = append(redacted, proxypool.Redact(entry))
+		}
+		log.Printf("Ignoring %d invalid proxy entries: %s",
+			len(invalid), strings.Join(redacted, ", "))
 	}
 
 	app := server.New(cfg, currentVersion)
@@ -97,9 +138,19 @@ func main() {
 		cookieStatus = fmt.Sprintf("yes (%s)", cfg.CookieFile)
 	}
 
-	proxyStatus := cfg.Proxy
-	if proxyStatus == "" {
-		proxyStatus = "system env"
+	proxyList := cfg.ProxyList()
+	proxyStatus := "system env (no explicit proxy)"
+	switch len(proxyList) {
+	case 1:
+		proxyStatus = proxypool.Redact(proxyList[0])
+	case 0:
+	default:
+		redacted := make([]string, 0, len(proxyList))
+		for _, proxyURL := range proxyList {
+			redacted = append(redacted, proxypool.Redact(proxyURL))
+		}
+		proxyStatus = fmt.Sprintf("%d proxies round-robin (%s)",
+			len(proxyList), strings.Join(redacted, ", "))
 	}
 
 	impersonateStatus := cfg.Impersonate

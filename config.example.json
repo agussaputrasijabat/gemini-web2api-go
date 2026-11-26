@@ -13,6 +13,7 @@
   ],
   "cookie_file": null,
   "proxy": null,
+  "proxies": [],
   "log_requests": true,
   "impersonate": "",
   "temporary_chats": false

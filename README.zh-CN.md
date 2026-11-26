@@ -304,6 +304,7 @@ Neon 和 Carbon 路由需要付费 **Google AI Pro / Ultra** 订阅。免费的 
   "api_keys": ["sk-your-key"],
   "cookie_file": null,
   "proxy": null,
+  "proxies": [],
   "impersonate": null,
   "log_requests": true
 }
@@ -346,6 +347,42 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
 set HTTPS_PROXY=http://127.0.0.1:7890
 gemini-web2api.exe
 ```
+
+### 多代理（轮询）
+
+使用`proxies`在多个代理之间轮询每个上游请求。支持 HTTP、HTTPS、SOCKS5 和
+SOCKS5H。旧的单`proxy`字段仍然可用；两者同时存在时，`proxy`排在最前。
+
+```json
+{
+  "proxies": [
+    "http://127.0.0.1:60000",
+    "socks5://user:pass@127.0.0.1:60001",
+    "http://proxy.example.com:8080"
+  ]
+}
+```
+
+也可以通过命令行传入，支持重复参数或逗号分隔：
+
+```bash
+./gemini-web2api \
+  --proxy http://127.0.0.1:60000 \
+  --proxy socks5://127.0.0.1:60001
+
+./gemini-web2api --proxies http://127.0.0.1:60000,socks5://127.0.0.1:60001
+```
+
+还可以设置`GEMINI_WEB2API_PROXIES`（逗号分隔）。优先级为：命令行参数 →
+`GEMINI_WEB2API_PROXIES` → `config.json`。
+
+每个代理都有独立的传输层和连接池；请求通过无锁轮询计数器选择。传输错误、
+HTTP 5xx、限流和 IP 封禁会重试并自动切换到下一个代理，而账号级故障
+（cookie 失效、构建标签过期）不会轮换。配置项会经过校验、去重，日志中的
+凭据会被隐藏。
+
+> **提示：** 如果使用已登录的 cookie，频繁更换 IP 可能被 Google 视为可疑会话。
+> 如果遇到登录或验证码挑战，请只使用一个代理，或在代理服务商处启用粘性会话。
 
 ## 局限性
 

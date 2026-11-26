@@ -303,8 +303,11 @@ func UserAgent(profile string) string { return lookupProfile(profile).UserAgent 
 // their own headers use it to keep the User-Agent consistent with the transport
 // instead of hardcoding a string.
 func ProfileOf(req Requester) string {
-	if adapter, ok := req.(*tlsClientAdapter); ok {
-		return adapter.profileName
+	// Both a single tlsClientAdapter and a proxy pool expose Profile. Reading
+	// the interface keeps the proxy pool from hiding the impersonation profile
+	// from header construction.
+	if reporter, ok := req.(interface{ Profile() string }); ok {
+		return reporter.Profile()
 	}
 	return ""
 }
@@ -322,6 +325,9 @@ type tlsClientAdapter struct {
 	profileName string
 	headerOrder []string
 }
+
+// Profile reports the impersonated browser profile backing this adapter.
+func (a *tlsClientAdapter) Profile() string { return a.profileName }
 
 var (
 	clientMap   = make(map[string]*tlsClientAdapter)

@@ -3,8 +3,6 @@ package server
 import (
 	"log"
 	"net/http"
-	"net/url"
-	"time"
 
 	"github.com/ikhsan3adi/gemini-web2api/internal/config"
 	"github.com/ikhsan3adi/gemini-web2api/internal/gemini"
@@ -18,21 +16,6 @@ type App struct {
 	HTTPClient *http.Client
 	Logf       func(format string, args ...any)
 	Version    string
-}
-
-func createHTTPClient(cfg config.Config) *http.Client {
-	transport := &http.Transport{}
-	if cfg.Proxy != "" {
-		if proxyURL, err := url.Parse(cfg.Proxy); err == nil {
-			transport.Proxy = http.ProxyURL(proxyURL)
-		}
-	} else {
-		transport.Proxy = http.ProxyFromEnvironment
-	}
-	return &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
 }
 
 func New(cfg config.Config, version string) *App {
