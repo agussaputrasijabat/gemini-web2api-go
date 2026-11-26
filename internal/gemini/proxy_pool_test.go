@@ -51,7 +51,7 @@ func TestProxyRequesterPoolRotates(t *testing.T) {
 		&fakeRequester{name: "b"},
 		&fakeRequester{name: "c"},
 	}
-	pool := newProxyRequesterPool(proxyEntries(requesters...), "chrome_146")
+	pool := newProxyRequesterPool(proxyEntries(requesters...), "chrome_146", nil)
 
 	if pool.Len() != 3 {
 		t.Fatalf("Len = %d, want 3", pool.Len())
@@ -80,7 +80,7 @@ func TestProxyRequesterPoolSkipsCoolingProxy(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	bad := &fakeRequester{name: "bad", err: errors.New("connection refused")}
 	good := &fakeRequester{name: "good"}
-	pool := newProxyRequesterPool(proxyEntries(bad, good), "")
+	pool := newProxyRequesterPool(proxyEntries(bad, good), "", nil)
 	pool.now = func() time.Time { return now }
 
 	// First request hits the bad proxy and cools it down.
@@ -119,7 +119,7 @@ func TestProxyRequesterPoolUsesAllWhenEveryProxyCools(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	a := &fakeRequester{name: "a", err: errors.New("timeout")}
 	b := &fakeRequester{name: "b", err: errors.New("timeout")}
-	pool := newProxyRequesterPool(proxyEntries(a, b), "")
+	pool := newProxyRequesterPool(proxyEntries(a, b), "", nil)
 	pool.now = func() time.Time { return now }
 
 	for i := 0; i < 4; i++ {
@@ -140,7 +140,7 @@ func TestProxyCooldownOnRateLimitAndClearOnSuccess(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header)}
 		},
 	}
-	pool := newProxyRequesterPool(proxyEntries(limited), "")
+	pool := newProxyRequesterPool(proxyEntries(limited), "", nil)
 	pool.now = func() time.Time { return now }
 
 	if _, err := pool.Do(&http.Request{}); err != nil {
@@ -164,7 +164,7 @@ func TestShouldRotateOnOnlyForProxySpecificFailures(t *testing.T) {
 	pool := newProxyRequesterPool(proxyEntries(
 		&fakeRequester{name: "a"},
 		&fakeRequester{name: "b"},
-	), "")
+	), "", nil)
 	multi := &Client{HTTP: pool}
 
 	if !multi.shouldRotateOn(&UpstreamError{Kind: KindBlocked}) {
@@ -217,5 +217,124 @@ func TestNewRequesterBuildsPoolForMultipleProxies(t *testing.T) {
 	}
 	if got := pool.Profile(); got != "chrome_146" {
 		t.Fatalf("pool Profile = %q, want chrome_146", got)
+	}
+}
+
+func TestProxyRequesterPoolUsesDirectFallbackOnlyWhenAllCooling(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	a := &fakeRequester{name: "a", err: errors.New("connection refused")}
+	b := &fakeRequester{name: "b", err: errors.New("connection refused")}
+	direct := &fakeRequester{name: "direct"}
+	pool := newProxyRequesterPool(proxyEntries(a, b), "", direct)
+	pool.now = func() time.Time { return now }
+
+	if !pool.HasFallback() {
+		t.Fatal("HasFallback = false, want true")
+	}
+	if pool.Len() != 2 {
+		t.Fatalf("Len = %d, want 2 proxies (fallback excluded)", pool.Len())
+	}
+
+	// First two attempts hit the two proxies and cool them down.
+	for i := 0; i < 2; i++ {
+		if _, err := pool.Do(&http.Request{}); err == nil {
+			t.Fatalf("attempt %d must surface the proxy error", i)
+		}
+	}
+	if got := direct.calls.Load(); got != 0 {
+		t.Fatalf("direct fallback used too early: calls = %d, want 0", got)
+	}
+
+	// Every proxy is cooling now: the next request goes direct.
+	if _, err := pool.Do(&http.Request{}); err != nil {
+		t.Fatalf("direct fallback error: %v", err)
+	}
+	if got := direct.calls.Load(); got != 1 {
+		t.Fatalf("direct fallback calls = %d, want 1", got)
+	}
+
+	// Once the cooldown expires the proxies re-enter rotation and the pool
+	// stops using the direct fallback.
+	now = now.Add(proxyTransportCooldown + time.Second)
+	a.err = nil
+	b.err = nil
+	if _, err := pool.Do(&http.Request{}); err != nil {
+		t.Fatalf("post-cooldown proxy request error: %v", err)
+	}
+	if got := a.calls.Load() + b.calls.Load(); got != 3 {
+		t.Fatalf("recovered proxy calls = %d, want 3", got)
+	}
+	if got := direct.calls.Load(); got != 1 {
+		t.Fatalf("direct fallback kept being used after recovery: calls = %d, want 1", got)
+	}
+}
+
+func TestProxyRequesterPoolWithoutFallbackKeepsUsingCoolingProxy(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	a := &fakeRequester{name: "a", err: errors.New("timeout")}
+	b := &fakeRequester{name: "b", err: errors.New("timeout")}
+	pool := newProxyRequesterPool(proxyEntries(a, b), "", nil)
+	pool.now = func() time.Time { return now }
+
+	for i := 0; i < 4; i++ {
+		_, _ = pool.Do(&http.Request{})
+	}
+	if got := a.calls.Load() + b.calls.Load(); got != 4 {
+		t.Fatalf("pool stopped using cooling proxies: calls = %d, want 4", got)
+	}
+}
+
+func TestEffectiveAttemptsCoversProxiesAndFallback(t *testing.T) {
+	pool := newProxyRequesterPool(proxyEntries(
+		&fakeRequester{name: "a"},
+		&fakeRequester{name: "b"},
+		&fakeRequester{name: "c"},
+	), "", &fakeRequester{name: "direct"})
+	client := &Client{
+		Cfg:  config.Config{RetryAttempts: 1},
+		HTTP: pool,
+	}
+	if got := client.effectiveAttempts(); got != 4 {
+		t.Fatalf("effectiveAttempts = %d, want 4 (3 proxies + direct)", got)
+	}
+
+	noFallback := &Client{
+		Cfg: config.Config{RetryAttempts: 1},
+		HTTP: newProxyRequesterPool(proxyEntries(
+			&fakeRequester{name: "a"},
+			&fakeRequester{name: "b"},
+		), "", nil),
+	}
+	if got := noFallback.effectiveAttempts(); got != 1 {
+		t.Fatalf("effectiveAttempts without fallback = %d, want 1", got)
+	}
+
+	many := make([]*proxyRequesterEntry, 0, maxEffectiveAttempts+5)
+	for i := 0; i < maxEffectiveAttempts+5; i++ {
+		many = append(many, &proxyRequesterEntry{requester: &fakeRequester{name: "x"}})
+	}
+	capped := &Client{
+		Cfg:  config.Config{RetryAttempts: 1},
+		HTTP: newProxyRequesterPool(many, "", &fakeRequester{name: "direct"}),
+	}
+	if got := capped.effectiveAttempts(); got != maxEffectiveAttempts {
+		t.Fatalf("effectiveAttempts cap = %d, want %d", got, maxEffectiveAttempts)
+	}
+}
+
+func TestNewRequesterEnablesDirectFallback(t *testing.T) {
+	cfg := config.Default()
+	cfg.Impersonate = "chrome_146"
+	cfg.Proxies = []string{"http://127.0.0.1:60000", "http://127.0.0.1:60001"}
+	cfg.DirectFallback = true
+	cfg.RequestTimeoutSec = 30
+
+	requester := newRequester(cfg)
+	pool, ok := requester.(*proxyRequesterPool)
+	if !ok {
+		t.Fatalf("requester type = %T, want *proxyRequesterPool", requester)
+	}
+	if !pool.HasFallback() {
+		t.Fatal("direct fallback was not attached")
 	}
 }

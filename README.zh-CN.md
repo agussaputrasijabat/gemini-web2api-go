@@ -305,6 +305,7 @@ Neon 和 Carbon 路由需要付费 **Google AI Pro / Ultra** 订阅。免费的 
   "cookie_file": null,
   "proxy": null,
   "proxies": [],
+  "direct_fallback": false,
   "impersonate": null,
   "log_requests": true
 }
@@ -380,6 +381,20 @@ SOCKS5H。旧的单`proxy`字段仍然可用；两者同时存在时，`proxy`�
 HTTP 5xx、限流和 IP 封禁会重试并自动切换到下一个代理，而账号级故障
 （cookie 失效、构建标签过期）不会轮换。配置项会经过校验、去重，日志中的
 凭据会被隐藏。
+
+失败的代理会进入冷却（传输错误/5xx 为 30 秒，429 为 2 分钟，IP 封禁为
+5 分钟）并被跳过。如果**所有**代理都在冷却，可以启用 `direct_fallback`
+作为最后手段直接连接：
+
+```json
+{
+  "proxies": ["http://127.0.0.1:60000", "http://127.0.0.1:60001"],
+  "direct_fallback": true
+}
+```
+
+直接回退不参与正常轮询，只在所有代理冷却时使用，并在任意代理恢复后立即
+停止。该选项默认关闭，因为直连会向 Google 暴露主机真实 IP。
 
 > **提示：** 如果使用已登录的 cookie，频繁更换 IP 可能被 Google 视为可疑会话。
 > 如果遇到登录或验证码挑战，请只使用一个代理，或在代理服务商处启用粘性会话。

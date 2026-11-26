@@ -20,6 +20,7 @@ type Config struct {
 	CookieFile        string   `json:"cookie_file"`
 	Proxy             string   `json:"proxy"`
 	Proxies           []string `json:"proxies"`
+	DirectFallback    bool     `json:"direct_fallback"`
 	APIKeys           []string `json:"api_keys"`
 	Impersonate       string   `json:"impersonate"`
 	TemporaryChats    bool     `json:"temporary_chats"`
@@ -46,6 +47,8 @@ func Default() Config {
 		LogRequests:        true,
 		CookieFile:         "",
 		Proxy:              "",
+		Proxies:            []string{},
+		DirectFallback:     false,
 		APIKeys:            []string{},
 		Impersonate:        "",
 		TemporaryChats:     false,
@@ -81,6 +84,7 @@ func Load(path string) (Config, error) {
 		CookieFile         *string   `json:"cookie_file"`
 		Proxy              *string   `json:"proxy"`
 		Proxies            *[]string `json:"proxies"`
+		DirectFallback     *bool     `json:"direct_fallback"`
 		APIKeys            *[]string `json:"api_keys"`
 		Impersonate        *string   `json:"impersonate"`
 		TemporaryChats     *bool     `json:"temporary_chats"`
@@ -129,6 +133,9 @@ func Load(path string) (Config, error) {
 	}
 	if aux.Proxies != nil {
 		cfg.Proxies = *aux.Proxies
+	}
+	if aux.DirectFallback != nil {
+		cfg.DirectFallback = *aux.DirectFallback
 	}
 	if aux.APIKeys != nil {
 		cfg.APIKeys = *aux.APIKeys

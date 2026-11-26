@@ -340,6 +340,41 @@ func (c *Client) proxyCount() int {
 	return 1
 }
 
+// maxEffectiveAttempts bounds the per-request attempt expansion used to reach
+// every proxy and, optionally, the direct fallback. It keeps pathological
+// proxy lists from turning one request into a very long chain of retries.
+const maxEffectiveAttempts = 8
+
+// hasDirectFallback reports whether the requester can bypass proxies after
+// every proxy has entered cooldown.
+func (c *Client) hasDirectFallback() bool {
+	if pool, ok := c.HTTP.(interface{ HasFallback() bool }); ok {
+		return pool.HasFallback()
+	}
+	return false
+}
+
+// effectiveAttempts makes sure a single logical request can try each proxy and
+// then the direct fallback when it is enabled. Without this, five dead proxies
+// with the default three attempts would exhaust retries before the fallback
+// became reachable. Existing configs keep their retry_attempts value.
+func (c *Client) effectiveAttempts() int {
+	attempts := c.Cfg.RetryAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	if c.hasDirectFallback() {
+		needed := c.proxyCount() + 1
+		if needed > maxEffectiveAttempts {
+			needed = maxEffectiveAttempts
+		}
+		if attempts < needed {
+			attempts = needed
+		}
+	}
+	return attempts
+}
+
 // shouldRotateOn reports whether a terminal failure on the current proxy is
 // worth retrying through a different one. Auth and stale-BL failures are
 // global to the account/upstream, so rotating cannot help. An IP block or a
@@ -444,10 +479,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, opt ModelOptions, 
 		headers.Set(HeaderJspb90, "[0,0,0]")
 	}
 
-	attempts := c.Cfg.RetryAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := c.effectiveAttempts()
 	blRefreshes := 0
 	var lastErr error
 
@@ -555,10 +587,7 @@ func (c *Client) GenerateStream(ctx context.Context, prompt string, opt ModelOpt
 		headers.Set(HeaderJspb90, "[0,0,0]")
 	}
 
-	attempts := c.Cfg.RetryAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := c.effectiveAttempts()
 	blRefreshes := 0
 	parser := NewStreamParser()
 	var lastErr error

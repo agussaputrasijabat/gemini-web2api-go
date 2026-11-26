@@ -303,6 +303,7 @@ Create `config.json` in the same directory:
   "cookie_file": null,
   "proxy": null,
   "proxies": [],
+  "direct_fallback": false,
   "impersonate": null,
   "log_requests": true
 }
@@ -381,6 +382,21 @@ with a lock-free round-robin counter. Retries for transport errors, HTTP 5xx,
 rate limits, and IP blocks advance to the next proxy automatically, while
 account-wide failures (invalid cookies, stale build label) do not rotate.
 Entries are validated, de-duplicated, and credentials are redacted from logs.
+
+A failing proxy enters a cooldown (30s for transport/5xx errors, 2 minutes for
+429, 5 minutes for an IP block) and is skipped. If **every** proxy is cooling,
+set `direct_fallback` to allow a direct connection as a last resort:
+
+```json
+{
+  "proxies": ["http://127.0.0.1:60000", "http://127.0.0.1:60001"],
+  "direct_fallback": true
+}
+```
+
+The direct fallback is never part of normal rotation; it is used only while all
+proxies are cooling and disappears as soon as a proxy recovers. It is disabled
+by default because it exposes the host's real IP to Google.
 
 > **Tip:** rotating IPs on every request can make Google treat an authenticated
 > cookie session as suspicious. If you use a signed-in account and see login or

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -39,5 +41,28 @@ func TestProxyListEmpty(t *testing.T) {
 	}
 	if got := cfg.RawProxyList(); len(got) != 0 {
 		t.Fatalf("RawProxyList = %v, want empty", got)
+	}
+}
+
+func TestLoadDirectFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{
+		"proxies": ["127.0.0.1:60000", "127.0.0.1:60001"],
+		"direct_fallback": true
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.DirectFallback {
+		t.Fatal("DirectFallback = false, want true")
+	}
+	want := []string{"http://127.0.0.1:60000", "http://127.0.0.1:60001"}
+	if got := cfg.ProxyList(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ProxyList = %v, want %v", got, want)
 	}
 }

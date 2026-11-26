@@ -153,6 +153,11 @@ func main() {
 			len(proxyList), strings.Join(redacted, ", "))
 	}
 
+	fallbackStatus := "no"
+	if cfg.DirectFallback && len(proxyList) > 0 {
+		fallbackStatus = "yes (only when all proxies are cooling)"
+	}
+
 	impersonateStatus := cfg.Impersonate
 	if impersonateStatus == "" {
 		impersonateStatus = "none (stdlib)"
@@ -169,6 +174,7 @@ func main() {
 	fmt.Printf("  Models:      %s\n", strings.Join(modelKeys, ", "))
 	fmt.Printf("  Cookie:      %s\n", cookieStatus)
 	fmt.Printf("  Proxy:       %s\n", proxyStatus)
+	fmt.Printf("  Fallback:    %s\n", fallbackStatus)
 	fmt.Printf("  Impersonate: %s\n", impersonateStatus)
 	fmt.Printf("  Temporary:   %s\n", temporaryStatus)
 	fmt.Println()

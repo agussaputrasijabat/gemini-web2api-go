@@ -14,6 +14,7 @@
   "cookie_file": null,
   "proxy": null,
   "proxies": [],
+  "direct_fallback": false,
   "log_requests": true,
   "impersonate": "",
   "temporary_chats": false
